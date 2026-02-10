@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>cc-nim Admin Dashboard</title>
+    <link rel="stylesheet" href="/admin/static/style.css">
+</head>
+<body>
+    <div id="login-overlay">
+        <div id="login-box">
+            <h1>Admin Login</h1>
+            <input type="text" id="username" placeholder="Username" value="admin">
+            <input type="password" id="password" placeholder="Password" value="admin123">
+            <button onclick="login()">Login</button>
+            <p id="login-error" style="color: red; display: none;">Invalid credentials</p>
+        </div>
+    </div>
+
+    <div id="app" style="display: none;">
+        <header>
+            <h1>cc-nim Admin Dashboard</h1>
+            <div class="header-stats">
+                <span class="stat-badge" id="rpm-stat">RPM: --</span>
+                <span class="stat-badge" id="success-rate-stat">Success: --%</span>
+                <span class="stat-badge" id="total-requests-stat">Total: --</span>
+            </div>
+        </header>
+
+        <nav>
+            <button class="nav-btn active" onclick="showTab('dashboard')">Dashboard</button>
+            <button class="nav-btn" onclick="showTab('logs')">Live Logs</button>
+            <button class="nav-btn" onclick="showTab('keys')">API Keys</button>
+            <button class="nav-btn" onclick="showTab('models')">Model Chain</button>
+        </nav>
+
+        <main>
+            <!-- Dashboard Tab -->
+            <section id="dashboard-tab" class="tab-content active">
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h3>Model Chain</h3>
+                        <div id="model-chain-list"></div>
+                    </div>
+                    
+                    <div class="card">
+                        <h3>Model Health</h3>
+                        <div id="model-health-list"></div>
+                    </div>
+                    
+                    <div class="card">
+                        <h3>API Keys</h3>
+                        <div id="keys-summary"></div>
+                    </div>
+                    
+                    <div class="card">
+                        <h3>Settings</h3>
+                        <div id="settings-info"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Live Logs Tab -->
+            <section id="logs-tab" class="tab-content">
+                <div class="filter-bar">
+                    <input type="text" id="log-filter-model" placeholder="Filter by model..." onkeyup="filterLogs()">
+                    <input type="text" id="log-filter-key" placeholder="Filter by key..." onkeyup="filterLogs()">
+                    <select id="log-filter-status" onchange="filterLogs()">
+                        <option value="">All Status</option>
+                        <option value="success">Success</option>
+                        <option value="error">Error</option>
+                    </select>
+                    <span id="log-count">0 logs</span>
+                </div>
+                <div class="table-container">
+                    <table id="logs-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Model</th>
+                                <th>Key</th>
+                                <th>Status</th>
+                                <th>Response Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logs-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- API Keys Tab -->
+            <section id="keys-tab" class="tab-content">
+                <div class="card">
+                    <h3>API Keys Management</h3>
+                    <table id="keys-table">
+                        <thead>
+                            <tr>
+                                <th>Key (Masked)</th>
+                                <th>Status</th>
+                                <th>Requests/Min</th>
+                                <th>In Flight</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="keys-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Model Chain Tab -->
+            <section id="models-tab" class="tab-content">
+                <div class="card">
+                    <h3>Model Chain Ordering</h3>
+                    <p>Drag to reorder models (primary → fallback chain)</p>
+                    <ul id="chain-list" class="chain-list"></ul>
+                    <button onclick="saveChainOrder()" class="primary-btn">Save Order</button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/admin/static/admin.js"></script>
+</body>
+</html>
