@@ -4,6 +4,9 @@ Centralizes model name mapping logic to avoid duplication across the codebase.
 """
 
 import os
+import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 # Provider prefixes to strip from model names
@@ -11,6 +14,49 @@ _PROVIDER_PREFIXES = ["anthropic/", "openai/", "gemini/"]
 
 # Claude model identifiers
 _CLAUDE_IDENTIFIERS = ["haiku", "sonnet", "opus", "claude"]
+
+
+@lru_cache(maxsize=1)
+def _load_nim_model_catalog() -> list[str]:
+    """Load local NVIDIA model IDs from nvidia_nim_models.json."""
+    catalog_path = Path("nvidia_nim_models.json")
+    if not catalog_path.exists():
+        return []
+
+    try:
+        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+        models: list[str] = []
+        for row in rows:
+            if isinstance(row, dict):
+                model_id = row.get("id")
+                if isinstance(model_id, str) and model_id.strip():
+                    models.append(model_id.strip())
+        return sorted(set(models))
+    except Exception:
+        return []
+
+
+def resolve_model_alias(model: str) -> str:
+    """Resolve shorthand model aliases to full NIM IDs when possible."""
+    candidate = model.strip()
+    if not candidate:
+        return model
+
+    catalog = _load_nim_model_catalog()
+    if not catalog:
+        return model
+
+    # Exact match already valid.
+    if candidate in catalog:
+        return candidate
+
+    # Providerless shorthand: match unique tail `<provider>/<name>`.
+    tail_matches = [item for item in catalog if item.endswith(f"/{candidate}")]
+    if len(tail_matches) == 1:
+        return tail_matches[0]
+
+    return model
 
 
 def strip_provider_prefixes(model: str) -> str:
@@ -68,7 +114,7 @@ def normalize_model_name(model: str, default_model: Optional[str] = None) -> str
             default_model = os.getenv("MODEL", "moonshotai/kimi-k2-thinking")
         return default_model
 
-    return model
+    return resolve_model_alias(model)
 
 
 def get_original_model(model: str) -> str:

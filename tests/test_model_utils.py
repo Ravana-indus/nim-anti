@@ -5,6 +5,7 @@ from providers.model_utils import (
     is_claude_model,
     normalize_model_name,
     get_original_model,
+    resolve_model_alias,
 )
 
 
@@ -46,6 +47,34 @@ def test_get_original_model():
 def test_normalize_model_name_without_default(monkeypatch):
     monkeypatch.setenv("MODEL", "env-default-model")
     assert normalize_model_name("claude-3") == "env-default-model"
+
+
+def test_resolve_model_alias_exact_match():
+    assert resolve_model_alias("stepfun-ai/step-3.5-flash") == "stepfun-ai/step-3.5-flash"
+
+
+def test_resolve_model_alias_providerless_unique(monkeypatch):
+    monkeypatch.setattr(
+        "providers.model_utils._load_nim_model_catalog",
+        lambda: ["stepfun-ai/step-3.5-flash", "moonshotai/kimi-k2.5"],
+    )
+    assert resolve_model_alias("step-3.5-flash") == "stepfun-ai/step-3.5-flash"
+
+
+def test_resolve_model_alias_providerless_ambiguous(monkeypatch):
+    monkeypatch.setattr(
+        "providers.model_utils._load_nim_model_catalog",
+        lambda: ["vendor-a/foo", "vendor-b/foo"],
+    )
+    assert resolve_model_alias("foo") == "foo"
+
+
+def test_normalize_model_name_non_claude_alias_resolution(monkeypatch):
+    monkeypatch.setattr(
+        "providers.model_utils._load_nim_model_catalog",
+        lambda: ["stepfun-ai/step-3.5-flash"],
+    )
+    assert normalize_model_name("step-3.5-flash", "unused") == "stepfun-ai/step-3.5-flash"
 
 
 # --- Parametrized Edge Case Tests ---
