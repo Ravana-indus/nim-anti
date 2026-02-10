@@ -1,7 +1,7 @@
 // State
 let authHeader = '';
 let ws = null;
-let currentChain = [];
+let modelCatalogLoaded = false;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -9,31 +9,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedAuth = localStorage.getItem('ccnim_admin_auth');
     if (savedAuth) {
         authHeader = savedAuth;
-        showApp();
+    } else {
+        authHeader = '';
     }
+    // Backend currently allows open admin routes; don't block UI behind login.
+    showApp();
 });
 
 function login() {
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
     
-    authHeader = 'Basic ' + btoa(username + ':' + password);
-    
-    // Test credentials
-    fetch('/admin/status', {
-        headers: { 'Authorization': authHeader }
-    })
-    .then(res => {
-        if (res.ok) {
-            localStorage.setItem('ccnim_admin_auth', authHeader);
-            showApp();
-        } else {
-            document.getElementById('login-error').style.display = 'block';
-        }
-    })
-    .catch(() => {
-        document.getElementById('login-error').style.display = 'block';
-    });
+    authHeader = username || password ? ('Basic ' + btoa(username + ':' + password)) : '';
+    localStorage.setItem('ccnim_admin_auth', authHeader);
+    showApp();
 }
 
 function showApp() {
@@ -47,13 +36,12 @@ function showApp() {
     loadDashboard();
     loadLogs();
     loadKeys();
-    loadModels();
+    refreshModelCatalog();
     
     // Refresh interval
     setInterval(loadDashboard, 5000);
     setInterval(loadLogs, 5000);
     setInterval(loadKeys, 5000);
-    setInterval(loadModels, 5000);
 }
 
 function connectWebSocket() {
@@ -100,11 +88,23 @@ function showTab(tabName) {
 // Dashboard
 function loadDashboard() {
     fetch('/admin/status', { headers: { 'Authorization': authHeader } })
-        .then(res => res.json())
+        .then(res => {
+            if (!res.ok) {
+                throw new Error(`status ${res.status}`);
+            }
+            return res.json();
+        })
         .then(data => {
             updateDashboard(data);
         })
-        .catch(err => console.error('Error loading dashboard:', err));
+        .catch(err => {
+            console.error('Error loading dashboard:', err);
+            const statusEl = document.getElementById('model-update-status');
+            if (statusEl) {
+                statusEl.textContent = 'Dashboard data unavailable. Check server logs.';
+                statusEl.className = 'model-status error';
+            }
+        });
 }
 
 function updateDashboard(data) {
@@ -114,43 +114,51 @@ function updateDashboard(data) {
     document.getElementById('success-rate-stat').textContent = `Success: ${agg.success_rate || 100}%`;
     document.getElementById('total-requests-stat').textContent = `Total: ${agg.total_requests || 0}`;
     
-    // Model Chain
-    const chainList = document.getElementById('model-chain-list');
-    chainList.innerHTML = '';
-    data.model_chain.forEach((model, index) => {
-        const isPrimary = index === 0;
-        const div = document.createElement('div');
-        div.className = `model-item ${isPrimary ? 'primary' : 'fallback'}`;
-        div.innerHTML = `
-            <span class="model-name">${isPrimary ? '🔴 ' : ''}${model}</span>
-            <span class="model-pos">#${index + 1}</span>
-        `;
-        chainList.appendChild(div);
-    });
-    
-    // Model Health
-    const healthList = document.getElementById('model-health-list');
-    healthList.innerHTML = '';
-    for (const [model, health] of Object.entries(data.health || {})) {
-        const div = document.createElement('div');
-        div.className = 'health-item';
-        
-        const rate = health.success_rate || 0;
-        const healthClass = rate > 90 ? '' : rate > 70 ? 'warning' : 'danger';
-        
-        div.innerHTML = `
-            <div class="health-item-header">
-                <span class="model-name">${model}</span>
-                <span class="health-stats">${health.success}/${health.total} (${rate}%)</span>
-            </div>
-            <div class="health-bar">
-                <div class="health-fill ${healthClass}" style="width: ${rate}%"></div>
-            </div>
-            ${health.recent_errors && health.recent_errors.length ? 
-                `<div class="error-list">${health.recent_errors.slice(0, 2).map(e => `• ${e.substring(0, 50)}...`).join('<br>')}</div>` : ''}
-        `;
-        healthList.appendChild(div);
+    // Active model
+    const modelView = document.getElementById('active-model-view');
+    const activeModel = data.active_model || 'unknown';
+    const defaultModel = data.default_model || 'unknown';
+    const hasOverride = !!data.has_runtime_model_override;
+    modelView.innerHTML = `
+        <div class="model-item primary">
+            <span class="model-name">${activeModel}</span>
+            <span class="model-pos">${hasOverride ? 'runtime override' : 'from .env MODEL'}</span>
+        </div>
+        <div class="settings-item">
+            <span class="settings-label">Default</span>
+            <span class="settings-value">${defaultModel}</span>
+        </div>
+    `;
+    const modelInput = document.getElementById('active-model-input');
+    if (modelInput && document.activeElement !== modelInput) {
+        modelInput.value = activeModel;
     }
+    const statusEl = document.getElementById('model-update-status');
+    if (statusEl && data.provider_error) {
+        statusEl.textContent = `Provider unavailable: ${data.provider_error}`;
+        statusEl.className = 'model-status error';
+    }
+    if (!modelCatalogLoaded) {
+        refreshModelCatalog();
+    }
+    
+    // Fallback summary
+    const fallbackInfo = document.getElementById('fallback-info');
+    const blockedKeys = (data.keys || []).filter(k => k.blocked).length;
+    fallbackInfo.innerHTML = `
+        <div class="settings-item">
+            <span class="settings-label">Strategy</span>
+            <span class="settings-value">API key rotation</span>
+        </div>
+        <div class="settings-item">
+            <span class="settings-label">Total Keys</span>
+            <span class="settings-value">${(data.keys || []).length}</span>
+        </div>
+        <div class="settings-item">
+            <span class="settings-label">Blocked Keys</span>
+            <span class="settings-value">${blockedKeys}</span>
+        </div>
+    `;
     
     // Keys Summary
     const keysSummary = document.getElementById('keys-summary');
@@ -159,9 +167,9 @@ function updateDashboard(data) {
         const div = document.createElement('div');
         div.className = 'keys-summary-item';
         div.innerHTML = `
-            <span class="key-badge">${key.key}</span>
+            <span class="key-badge">${key.key_masked || ('***' + key.key_suffix)}</span>
             <span class="${key.blocked ? 'status-blocked' : 'status-active'}">
-                ${key.blocked ? '🔴 Blocked' : `🟢 ${key.remaining_requests} left`}
+                ${key.blocked ? `🔴 Blocked (${key.cooldown_remaining_seconds || 0}s)` : `🟢 ${key.remaining_requests || 0} left`}
             </span>
         `;
         keysSummary.appendChild(div);
@@ -177,6 +185,18 @@ function updateDashboard(data) {
         <div class="settings-item">
             <span class="settings-label">Cooldown</span>
             <span class="settings-value">${data.settings.cooldown_seconds}s</span>
+        </div>
+        <div class="settings-item">
+            <span class="settings-label">Max In Flight</span>
+            <span class="settings-value">${data.settings.max_in_flight || '-'}</span>
+        </div>
+        <div class="settings-item">
+            <span class="settings-label">Active Requests</span>
+            <span class="settings-value">${(data.runtime && data.runtime.active_requests) || 0}</span>
+        </div>
+        <div class="settings-item">
+            <span class="settings-label">HTTP Latency</span>
+            <span class="settings-value">avg ${agg.avg_http_latency_ms || 0}ms / p95 ${agg.p95_http_latency_ms || 0}ms</span>
         </div>
     `;
 }
@@ -301,100 +321,74 @@ function unblockKey(keySuffix) {
     .catch(err => console.error('Error unblocking key:', err));
 }
 
-// Models
-function loadModels() {
-    fetch('/admin/chain', { headers: { 'Authorization': authHeader } })
-        .then(res => res.json())
-        .then(data => {
-            currentChain = data.chain || [];
-            renderChainList(currentChain);
-        })
-        .catch(err => console.error('Error loading chain:', err));
-}
-
-function renderChainList(chain) {
-    const list = document.getElementById('chain-list');
-    list.innerHTML = '';
-    
-    chain.forEach((model, index) => {
-        const li = document.createElement('li');
-        li.draggable = true;
-        li.dataset.model = model;
-        li.dataset.index = index;
-        li.innerHTML = `
-            <span class="chain-number">${index + 1}</span>
-            <span class="chain-model-name">${model}</span>
-        `;
-        
-        li.addEventListener('dragstart', handleDragStart);
-        li.addEventListener('dragover', handleDragOver);
-        li.addEventListener('drop', handleDrop);
-        li.addEventListener('dragenter', handleDragEnter);
-        li.addEventListener('dragleave', handleDragLeave);
-        
-        list.appendChild(li);
-    });
-}
-
-let draggedItem = null;
-
-function handleDragStart(e) {
-    draggedItem = this;
-    e.dataTransfer.effectAllowed = 'move';
-    this.style.opacity = '0.5';
-}
-
-function handleDragOver(e) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-}
-
-function handleDragEnter(e) {
-    this.style.border = '2px dashed #e94560';
-}
-
-function handleDragLeave(e) {
-    this.style.border = '';
-}
-
-function handleDrop(e) {
-    e.preventDefault();
-    this.style.border = '';
-    
-    if (draggedItem !== this) {
-        const fromIndex = parseInt(draggedItem.dataset.index);
-        const toIndex = parseInt(this.dataset.index);
-        
-        // Reorder array
-        const item = currentChain.splice(fromIndex, 1)[0];
-        currentChain.splice(toIndex, 0, item);
-        
-        renderChainList(currentChain);
+function updateActiveModel() {
+    const model = document.getElementById('active-model-input').value.trim();
+    const persist = !!document.getElementById('persist-model-checkbox').checked;
+    const statusEl = document.getElementById('model-update-status');
+    if (!model) {
+        statusEl.textContent = 'Model is required';
+        statusEl.className = 'model-status error';
+        return;
     }
-    
-    draggedItem.style.opacity = '';
-    draggedItem = null;
-}
 
-function saveChainOrder() {
-    fetch('/admin/chain/reorder', {
+    fetch('/admin/model', {
         method: 'POST',
         headers: {
             'Authorization': authHeader,
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify(currentChain)
+        body: JSON.stringify({ model, persist })
     })
     .then(res => res.json())
     .then(data => {
-        if (data.status === 'reordered') {
-            alert('Model chain updated successfully!');
+        if (data.status === 'updated') {
+            statusEl.textContent = data.persisted ? 'Model updated and persisted to .env' : 'Runtime model updated';
+            statusEl.className = 'model-status success';
+            loadDashboard();
         } else {
-            alert('Failed to update chain');
+            statusEl.textContent = data.detail || 'Failed to update model';
+            statusEl.className = 'model-status error';
         }
     })
     .catch(err => {
-        console.error('Error saving chain:', err);
-        alert('Error saving chain order');
+        console.error('Error updating model:', err);
+        statusEl.textContent = 'Error updating model';
+        statusEl.className = 'model-status error';
     });
+}
+
+function resetActiveModel() {
+    const statusEl = document.getElementById('model-update-status');
+    fetch('/admin/model/reset', {
+        method: 'POST',
+        headers: { 'Authorization': authHeader }
+    })
+    .then(res => res.json())
+    .then(() => {
+        statusEl.textContent = 'Runtime override cleared';
+        statusEl.className = 'model-status success';
+        loadDashboard();
+    })
+    .catch(err => {
+        console.error('Error resetting model:', err);
+        statusEl.textContent = 'Error resetting model';
+        statusEl.className = 'model-status error';
+    });
+}
+
+function refreshModelCatalog() {
+    fetch('/admin/models?limit=500', { headers: { 'Authorization': authHeader } })
+        .then(res => res.json())
+        .then(data => {
+            const datalist = document.getElementById('nim-model-options');
+            if (!datalist) return;
+            datalist.innerHTML = '';
+            (data.models || []).forEach(model => {
+                const option = document.createElement('option');
+                option.value = model;
+                datalist.appendChild(option);
+            });
+            modelCatalogLoaded = true;
+        })
+        .catch(err => console.error('Error loading model catalog:', err));
 }

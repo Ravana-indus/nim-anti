@@ -9,15 +9,15 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .routes import router
-from .admin import router as admin_router, log_request
-from .dependencies import cleanup_provider, get_provider
+from .admin import router as admin_router
+from .dependencies import cleanup_provider
 from providers.exceptions import ProviderError
 from config.settings import get_settings
-from .request_utils import get_token_count
+from .telemetry import telemetry
 
 # Configure logging (atomic - only on true fresh start)
 _settings = get_settings()
@@ -175,50 +175,24 @@ def create_app() -> FastAPI:
     # Middleware for logging requests to admin dashboard
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
-        # Only log /v1/messages requests
-        if request.url.path == "/v1/messages" and request.method == "POST":
-            start_time = time.time()
-            try:
-                response = await call_next(request)
-                process_time = (time.time() - start_time) * 1000
-                
-                # Log successful request
-                from .admin import log_request
-                try:
-                    provider = get_provider()
-                    key_manager = getattr(provider, '_key_manager', None)
-                    model_router = getattr(provider, '_model_router', None)
-                    
-                    # Get the model from request body
-                    body = await request.json()
-                    model = body.get("model", "unknown")
-                    
-                    # Get the key that was used (approximate from executor)
-                    key = "unknown"
-                    if key_manager:
-                        # Get the last used key
-                        active_keys = [k for k in key_manager.keys if key_manager._in_flight.get(k, 0) > 0]
-                        if active_keys:
-                            key = active_keys[0]
-                    
-                    # Determine status based on response
-                    status = "success" if response.status_code < 400 else "error"
-                    
-                    log_request(model, key, status, process_time)
-                except Exception:
-                    pass  # Don't break request if logging fails
-                
-                return response
-            except Exception as e:
-                process_time = (time.time() - start_time) * 1000
-                # Log failed request
-                try:
-                    from .admin import log_request
-                    log_request("unknown", "unknown", "error", process_time, str(e)[:100])
-                except Exception:
-                    pass
-                raise
-        return await call_next(request)
+        start_time = time.time()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            telemetry.record_http(
+                method=request.method,
+                path=request.url.path,
+                status_code=status_code,
+                latency_ms=(time.time() - start_time) * 1000,
+            )
+
+    @app.get("/metrics")
+    async def metrics():
+        """Prometheus-compatible metrics endpoint."""
+        return Response(content=telemetry.as_prometheus(), media_type="text/plain")
 
     # Exception handlers
     @app.exception_handler(ProviderError)

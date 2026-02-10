@@ -52,6 +52,14 @@ class NimKeyManager:
     def keys(self) -> list[str]:
         return list(self._keys)
 
+    @property
+    def rate_limit(self) -> int:
+        return self._rate_limit
+
+    @property
+    def rate_window(self) -> int:
+        return self._rate_window
+
     def get_available_keys(self) -> list[str]:
         """Get list of available keys (not in cooldown)."""
         now = time.monotonic()
@@ -119,3 +127,60 @@ class NimKeyManager:
     async def record_success(self, key: str) -> None:
         async with self._lock:
             self._cooldown_until[key] = 0.0
+
+    def find_key_by_suffix(self, key_suffix: str) -> Optional[str]:
+        """Resolve a key by its suffix for admin operations."""
+        for key in self._keys:
+            if key.endswith(key_suffix):
+                return key
+        return None
+
+    async def set_manual_block(self, key: str, seconds: int) -> None:
+        """Manually block a key for a duration in seconds."""
+        async with self._lock:
+            self._cooldown_until[key] = time.monotonic() + max(1, seconds)
+
+    async def clear_manual_block(self, key: str) -> None:
+        """Remove manual cooldown for a key."""
+        async with self._lock:
+            self._cooldown_until[key] = 0.0
+
+    async def snapshot(self) -> list[dict]:
+        """Return key status snapshot for diagnostics and admin UI."""
+        now = time.monotonic()
+        async with self._lock:
+            statuses: list[dict] = []
+            for key in self._keys:
+                self._prune(key, now)
+                used = len(self._requests[key])
+                remaining = max(0, self._rate_limit - used)
+                cooldown_remaining = max(0.0, self._cooldown_until[key] - now)
+                statuses.append(
+                    {
+                        "key_suffix": key[-4:] if len(key) >= 4 else key,
+                        "key_masked": f"{key[:8]}****{key[-4:]}",
+                        "blocked": cooldown_remaining > 0,
+                        "cooldown_remaining_seconds": round(cooldown_remaining, 2),
+                        "usage_count": used,
+                        "remaining_requests": remaining,
+                        "in_flight": self._in_flight.get(key, 0),
+                        "capacity_percent": round((remaining / self._rate_limit) * 100, 1),
+                    }
+                )
+            return statuses
+
+    async def min_wait_seconds(self) -> float:
+        """Return estimated seconds until at least one key is available."""
+        now = time.monotonic()
+        async with self._lock:
+            waits: list[float] = []
+            for key in self._keys:
+                self._prune(key, now)
+                if self._cooldown_until[key] > now:
+                    waits.append(self._cooldown_until[key] - now)
+                    continue
+                if len(self._requests[key]) < self._rate_limit:
+                    return 0.0
+                oldest = self._requests[key][0] if self._requests[key] else now
+                waits.append(max(0.0, oldest + self._rate_window - now))
+            return min(waits) if waits else 0.0

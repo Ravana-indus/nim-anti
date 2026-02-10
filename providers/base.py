@@ -21,7 +21,7 @@ class ProviderConfig(BaseModel):
     rate_limit: Optional[int] = None
     rate_window: int = 60
     key_cooldown_sec: int = 60
-    model_chain: list[str] = Field(default_factory=list)
+    max_in_flight: int = 32
     nim_settings: NimSettings = Field(default_factory=NimSettings)
 
 

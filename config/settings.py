@@ -1,6 +1,8 @@
 """Centralized configuration using Pydantic Settings."""
 
 from functools import lru_cache
+from pathlib import Path
+from threading import Lock
 from typing import Optional
 
 from pydantic import field_validator, Field
@@ -32,15 +34,11 @@ class Settings(BaseSettings):
     # ==================== Model Selection ====================
     # Backward-compatible single target model for Claude mapping.
     model: str = "moonshotai/kimi-k2.5"
-    # Primary -> fallback chain (comma-separated).
-    nvidia_nim_model_chain: str = (
-        "kimi-coding/k2p5,litellm-proxy/minimaxai/minimax-m2.1,litellm-proxy/z-ai/glm4.7"
-    )
-
     # ==================== Rate Limiting (per-key) ====================
     nvidia_nim_rate_limit: int = 40
     nvidia_nim_rate_window: int = 60
     nvidia_nim_key_cooldown_seconds: int = 60
+    nvidia_nim_max_in_flight: int = 32
 
     # ==================== Fast Prefix Detection ====================
     fast_prefix_detection: bool = True
@@ -89,3 +87,70 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+
+
+_active_model_lock = Lock()
+_active_model_override: Optional[str] = None
+
+
+def get_active_model() -> str:
+    """Get currently active model (runtime override or configured default)."""
+    with _active_model_lock:
+        if _active_model_override:
+            return _active_model_override
+    return get_settings().model
+
+
+def set_active_model(model: str) -> str:
+    """Set active model override at runtime."""
+    normalized = model.strip()
+    if not normalized:
+        raise ValueError("model cannot be empty")
+    with _active_model_lock:
+        global _active_model_override
+        _active_model_override = normalized
+    return normalized
+
+
+def clear_active_model_override() -> None:
+    """Clear runtime override so configured MODEL is used."""
+    with _active_model_lock:
+        global _active_model_override
+        _active_model_override = None
+
+
+def has_active_model_override() -> bool:
+    """Return True when runtime model override is set."""
+    with _active_model_lock:
+        return bool(_active_model_override)
+
+
+def persist_model_to_env(model: str, env_path: str = ".env") -> str:
+    """Persist MODEL to .env and refresh cached settings."""
+    normalized = model.strip()
+    if not normalized:
+        raise ValueError("model cannot be empty")
+
+    path = Path(env_path)
+    if path.exists():
+        lines = path.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = []
+
+    replaced = False
+    updated: list[str] = []
+    for line in lines:
+        if line.startswith("MODEL="):
+            updated.append(f'MODEL="{normalized}"')
+            replaced = True
+        else:
+            updated.append(line)
+
+    if not replaced:
+        if updated and updated[-1].strip():
+            updated.append("")
+        updated.append(f'MODEL="{normalized}"')
+
+    path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    get_settings.cache_clear()
+    return normalized

@@ -178,6 +178,45 @@ main {
     font-size: 0.9rem;
 }
 
+.model-controls {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.model-controls input {
+    flex: 1;
+    min-width: 220px;
+    padding: 0.5rem;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    background: #1a1a2e;
+    color: #eaeaea;
+}
+
+.model-persist {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: #c8c8c8;
+    font-size: 0.9rem;
+}
+
+.model-status {
+    margin-top: 0.75rem;
+    min-height: 1.2rem;
+    font-size: 0.9rem;
+}
+
+.model-status.success {
+    color: #4caf50;
+}
+
+.model-status.error {
+    color: #f44336;
+}
+
 .health-bar {
     width: 100px;
     height: 8px;

@@ -19,7 +19,7 @@ from .request_utils import (
     extract_filepaths_from_command,
     get_token_count,
 )
-from config.settings import Settings
+from config.settings import Settings, get_active_model
 from providers.base import BaseProvider
 from providers.exceptions import ProviderError
 from providers.logging_utils import log_request_compact
@@ -155,15 +155,11 @@ async def count_tokens(request_data: TokenCountRequest):
 @router.get("/")
 async def root(settings: Settings = Depends(get_settings)):
     """Root endpoint."""
-    model_chain = (
-        settings.nvidia_nim_model_chain.split(",")[0].strip()
-        if settings.nvidia_nim_model_chain
-        else settings.model
-    )
+    active_model = get_active_model()
     return {
         "status": "ok",
         "provider": "nvidia_nim",
-        "model": model_chain,
+        "model": active_model,
     }
 
 

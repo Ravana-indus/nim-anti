@@ -38,15 +38,7 @@ def get_provider() -> BaseProvider:
                 rate_limit=settings.nvidia_nim_rate_limit,
                 rate_window=settings.nvidia_nim_rate_window,
                 key_cooldown_sec=settings.nvidia_nim_key_cooldown_seconds,
-                model_chain=(
-                    [
-                        m.strip()
-                        for m in raw_model_chain.split(",")
-                        if m.strip()
-                    ]
-                    if isinstance((raw_model_chain := getattr(settings, "nvidia_nim_model_chain", "")), str)
-                    else []
-                ),
+                max_in_flight=settings.nvidia_nim_max_in_flight,
                 nim_settings=settings.nim,
             )
             _provider = NvidiaNimProvider(config)

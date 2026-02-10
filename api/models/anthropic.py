@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional, Union, Literal
 
 from pydantic import BaseModel, field_validator, model_validator
 
-from config.settings import get_settings
+from config.settings import get_active_model
 from providers.model_utils import normalize_model_name
 
 logger = logging.getLogger(__name__)
@@ -113,11 +113,10 @@ class MessagesRequest(BaseModel):
     @model_validator(mode="after")
     def map_model(self) -> "MessagesRequest":
         """Map any Claude model name to the configured NIM model."""
-        settings = get_settings()
         if self.original_model is None:
             self.original_model = self.model
 
-        mapped = normalize_model_name(self.model, settings.model)
+        mapped = normalize_model_name(self.model, get_active_model())
         if mapped != self.model:
             logger.debug(f"MODEL MAPPING: '{self.model}' -> '{mapped}'")
             self.model = mapped
@@ -137,8 +136,7 @@ class TokenCountRequest(BaseModel):
     @classmethod
     def validate_model_field(cls, v, info):
         """Map any Claude model name to the configured NIM model."""
-        settings = get_settings()
-        mapped = normalize_model_name(v, settings.model)
+        mapped = normalize_model_name(v, get_active_model())
         if mapped != v:
             logger.debug(f"MODEL MAPPING: '{v}' -> '{mapped}'")
         return mapped

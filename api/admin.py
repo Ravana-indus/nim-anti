@@ -2,28 +2,32 @@
 
 import asyncio
 import json
-import logging
-import time
+from pathlib import Path
 from collections import deque
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import AsyncGenerator, Deque, Optional
+from typing import Deque, Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 from .dependencies import get_provider
-from config.settings import Settings, get_settings
-from providers.base import BaseProvider
-
-logger = logging.getLogger(__name__)
+from .telemetry import telemetry
+from config.settings import (
+    clear_active_model_override,
+    get_active_model,
+    get_settings,
+    has_active_model_override,
+    persist_model_to_env,
+    set_active_model,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-# In-memory request log buffer (last 1000 requests)
+# In-memory request log buffer (last 1000 requests).
 request_logs: Deque[dict] = deque(maxlen=1000)
 
-# WebSocket connection manager
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
@@ -44,20 +48,57 @@ class ConnectionManager:
             except Exception:
                 self.disconnect(connection)
 
+
 manager = ConnectionManager()
 
-# Open access - no authentication required
+
+class ActiveModelUpdateRequest(BaseModel):
+    model: str
+    persist: bool = False
 
 
-@asynccontextmanager
-async def get_lifecycle_events():
-    """Context manager for lifecycle events (placeholder)."""
-    yield
+_model_catalog_cache: Optional[list[str]] = None
+
+
+def _safe_get_provider() -> tuple[Optional[object], Optional[str]]:
+    """Get provider safely without breaking admin dashboard rendering."""
+    try:
+        return get_provider(), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _load_model_catalog() -> list[str]:
+    """Load and cache available NIM models from local catalog file."""
+    global _model_catalog_cache
+    if _model_catalog_cache is not None:
+        return _model_catalog_cache
+
+    catalog_path = Path("nvidia_nim_models.json")
+    if not catalog_path.exists():
+        _model_catalog_cache = []
+        return _model_catalog_cache
+
+    try:
+        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+        raw_models = payload.get("data", []) if isinstance(payload, dict) else []
+        models: list[str] = []
+        for item in raw_models:
+            if isinstance(item, dict):
+                model_id = item.get("id")
+                if isinstance(model_id, str) and model_id.strip():
+                    models.append(model_id.strip())
+        _model_catalog_cache = sorted(set(models))
+    except Exception:
+        _model_catalog_cache = []
+
+    return _model_catalog_cache
 
 
 @dataclass
 class RequestLogEntry:
     """Structure for a request log entry."""
+
     timestamp: str
     model: str
     key_suffix: str
@@ -85,126 +126,192 @@ def log_request(
         response_time_ms=response_time_ms,
         error=error,
     )
-    request_logs.appendleft(entry.to_dict())
-    
-    # Broadcast to WebSocket clients
-    asyncio.create_task(manager.broadcast({"type": "log", "data": entry.to_dict()}))
+    event = entry.to_dict()
+    request_logs.appendleft(event)
+    broadcast_coro = manager.broadcast({"type": "log", "data": event})
+    try:
+        asyncio.create_task(broadcast_coro)
+    except RuntimeError:
+        # No active loop (e.g. sync test context) - skip WS broadcast.
+        broadcast_coro.close()
 
 
-# --- Dashboard Endpoints (Open Access) ---
+async def _provider_snapshot(provider: object) -> dict:
+    """Collect provider snapshot using public methods when available."""
+    if provider is None:
+        return {
+            "keys": [],
+            "health": {},
+            "runtime": {},
+        }
+
+    if hasattr(provider, "get_admin_snapshot"):
+        return await provider.get_admin_snapshot()
+
+    key_manager = getattr(provider, "_key_manager", None)
+    key_statuses: list[dict] = []
+    if key_manager:
+        if hasattr(key_manager, "snapshot"):
+            key_statuses = await key_manager.snapshot()
+        else:
+            for key in key_manager.keys:
+                key_statuses.append(
+                    {
+                        "key_suffix": key[-4:] if len(key) >= 4 else key,
+                        "key_masked": f"{key[:8]}****{key[-4:]}",
+                        "blocked": False,
+                        "cooldown_remaining_seconds": 0.0,
+                        "usage_count": 0,
+                        "remaining_requests": 0,
+                        "in_flight": 0,
+                        "capacity_percent": 0.0,
+                    }
+                )
+
+    return {
+        "keys": key_statuses,
+        "health": {},
+        "runtime": {},
+    }
+
+
+def _aggregate_from_logs() -> dict:
+    logs = list(request_logs)[:500]
+    total = len(logs)
+    successful = sum(1 for log in logs if log["status"] == "success")
+    failed = total - successful
+    telemetry_snapshot = telemetry.snapshot()
+    return {
+        "total_requests": total,
+        "successful": successful,
+        "failed": failed,
+        "success_rate": round((successful / total * 100) if total > 0 else 100, 1),
+        "requests_per_minute": telemetry_snapshot["http"]["requests_per_minute"],
+        "avg_http_latency_ms": telemetry_snapshot["http"]["latency_ms_avg"],
+        "p95_http_latency_ms": telemetry_snapshot["http"]["latency_ms_p95"],
+    }
+
+
+def _legacy_health_from_telemetry(active_model: str) -> dict:
+    """Build a minimal legacy model-health payload for older admin UIs."""
+    telemetry_snapshot = telemetry.snapshot()
+    provider_meta = telemetry_snapshot.get("provider_attempts", {})
+    by_model = provider_meta.get("by_model", {}) or {}
+    total = int(by_model.get(active_model, 0))
+    return {
+        active_model: {
+            "total": total,
+            "success": total,
+            "success_rate": 100.0 if total > 0 else 0.0,
+            "recent_errors": [],
+        }
+    }
+
 
 @router.get("/status")
 async def get_status():
     """Get overall system status."""
-    provider = get_provider()
+    provider, provider_error = _safe_get_provider()
     settings = get_settings()
-    
-    # Get key statuses from key manager
-    key_manager = getattr(provider, '_key_manager', None)
-    model_router = getattr(provider, '_model_router', None)
-    
-    keys_status = []
-    if key_manager:
-        now = time.monotonic()
-        for key in key_manager.keys:
-            key_status = {
-                "key": key[:8] + "..." + key[-4:],
-                "key_full": key,  # Full key for admin (masked in UI)
-                "blocked": key_manager._cooldown_until.get(key, 0) > now,
-                "remaining_requests": key_manager._rate_limit - len(key_manager._requests.get(key, [])),
-                "in_flight": key_manager._in_flight.get(key, 0),
-            }
-            keys_status.append(key_status)
-    
-    model_chain = []
-    if model_router:
-        model_chain = model_router.get_model_chain()
-    
-    health_summary = {}
-    if model_router:
-        for model in model_router._health:
-            h = model_router._health[model]
-            health_summary[model] = {
-                "total": h.total,
-                "success": h.success,
-                "success_rate": round(h.success_rate * 100, 1),
-                "recent_errors": list(h.recent_errors)[-5:],  # Last 5 errors
-            }
-    
-    # Calculate aggregate stats from logs
-    recent_logs = list(request_logs)[:100]
-    total_requests = len(recent_logs)
-    successful = sum(1 for log in recent_logs if log["status"] == "success")
-    failed = total_requests - successful
-    
-    # Calculate requests per minute (approximate from recent logs)
-    now = datetime.utcnow()
-    minute_ago = now.timestamp() - 60
-    rpm = sum(1 for log in recent_logs if datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00")).timestamp() > minute_ago)
-    
+    snapshot = await _provider_snapshot(provider)
+
+    active_model = get_active_model()
+    health = snapshot.get("health", {})
+    if not health:
+        health = _legacy_health_from_telemetry(active_model)
+
     return {
-        "model_chain": model_chain,
-        "keys": keys_status,
-        "health": health_summary,
-        "aggregate": {
-            "total_requests": total_requests,
-            "successful": successful,
-            "failed": failed,
-            "success_rate": round((successful / total_requests * 100) if total_requests > 0 else 100, 1),
-            "requests_per_minute": rpm,
-        },
+        "active_model": active_model,
+        "default_model": settings.model,
+        "has_runtime_model_override": has_active_model_override(),
+        # Backward compatibility for older dashboard JS.
+        "model_chain": [active_model],
+        "keys": snapshot.get("keys", []),
+        "health": health,
+        "runtime": snapshot.get("runtime", {}),
+        "provider_error": provider_error,
+        "aggregate": _aggregate_from_logs(),
         "settings": {
             "rate_limit": settings.nvidia_nim_rate_limit,
             "rate_window": settings.nvidia_nim_rate_window,
             "cooldown_seconds": settings.nvidia_nim_key_cooldown_seconds,
-        }
+            "max_in_flight": settings.nvidia_nim_max_in_flight,
+        },
+    }
+
+
+@router.get("/metrics")
+async def get_metrics():
+    """Get telemetry snapshot and provider runtime metrics."""
+    provider, provider_error = _safe_get_provider()
+    snapshot = await _provider_snapshot(provider)
+    return {
+        "telemetry": telemetry.snapshot(),
+        "provider_runtime": snapshot.get("runtime", {}),
+        "provider_error": provider_error,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
 
 @router.get("/keys")
 async def get_keys():
     """Get detailed API key status."""
-    provider = get_provider()
-    key_manager = getattr(provider, '_key_manager', None)
-    
-    if not key_manager:
-        return {"keys": []}
-    
-    now = time.monotonic()
-    keys = []
-    for key in key_manager.keys:
-        # Get recent errors for this key (from executor logs would be better, but this is a proxy)
-        keys.append({
-            "key_masked": key[:8] + "****" + key[-4:],
-            "key_suffix": key[-4:],
-            "blocked": key_manager._cooldown_until.get(key, 0) > now,
-            "cooldown_until": key_manager._cooldown_until.get(key, 0),
-            "in_flight": key_manager._in_flight.get(key, 0),
-            "usage_count": len(key_manager._requests.get(key, [])),
-        })
-    
-    return {"keys": keys}
+    provider, _ = _safe_get_provider()
+    snapshot = await _provider_snapshot(provider)
+    return {"keys": snapshot.get("keys", [])}
 
 
-@router.get("/chain")
-async def get_model_chain():
-    """Get current model chain."""
-    provider = get_provider()
-    model_router = getattr(provider, '_model_router', None)
-    
-    if not model_router:
-        return {"chain": []}
-    
+@router.get("/model")
+async def get_model():
+    """Get active model configuration."""
+    settings = get_settings()
     return {
-        "chain": model_router.get_model_chain(),
-        "health": {
-            model: {
-                "total": h.total,
-                "success": h.success,
-                "success_rate": round(h.success_rate * 100, 1),
-            }
-            for model, h in model_router._health.items()
+        "active_model": get_active_model(),
+        "default_model": settings.model,
+        "has_runtime_model_override": has_active_model_override(),
+    }
+
+
+@router.get("/models")
+async def get_models(q: Optional[str] = None, limit: int = 200):
+    """Get available NIM model catalog with optional search."""
+    safe_limit = max(1, min(limit, 1000))
+    models = _load_model_catalog()
+    if q:
+        needle = q.strip().lower()
+        models = [model for model in models if needle in model.lower()]
+    return {
+        "models": models[:safe_limit],
+        "total": len(models),
+    }
+
+
+@router.post("/model")
+async def set_model(payload: ActiveModelUpdateRequest):
+    """Set active runtime model for new requests."""
+    try:
+        model = set_active_model(payload.model)
+        if payload.persist:
+            persist_model_to_env(model)
+        return {
+            "status": "updated",
+            "active_model": model,
+            "has_runtime_model_override": True,
+            "persisted": payload.persist,
         }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/model/reset")
+async def reset_model():
+    """Reset model selection to default MODEL from settings."""
+    clear_active_model_override()
+    settings = get_settings()
+    return {
+        "status": "reset",
+        "active_model": settings.model,
+        "has_runtime_model_override": False,
     }
 
 
@@ -216,91 +323,59 @@ async def get_logs(
     limit: int = 100,
 ):
     """Get recent request logs (paginated/filtered)."""
+    safe_limit = max(1, min(limit, 1000))
     logs = list(request_logs)
-    
+
     if model:
         logs = [log for log in logs if log["model"] == model]
     if key_suffix:
         logs = [log for log in logs if log["key_suffix"] == key_suffix]
     if status:
         logs = [log for log in logs if log["status"] == status]
-    
-    return {"logs": logs[:limit]}
+
+    return {"logs": logs[:safe_limit]}
 
 
 @router.post("/keys/{key_suffix}/block")
 async def block_key(key_suffix: str):
     """Block a specific API key."""
-    provider = get_provider()
-    key_manager = getattr(provider, '_key_manager', None)
-    
+    provider, provider_error = _safe_get_provider()
+    if provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Provider not available: {provider_error or 'initialization failed'}",
+        )
+    key_manager = getattr(provider, "_key_manager", None)
     if not key_manager:
         raise HTTPException(status_code=500, detail="Key manager not available")
-    
-    # Find the key
-    target_key = None
-    for key in key_manager.keys:
-        if key.endswith(key_suffix):
-            target_key = key
-            break
-    
+
+    target_key = key_manager.find_key_by_suffix(key_suffix)
     if not target_key:
         raise HTTPException(status_code=404, detail="Key not found")
-    
-    # Set cooldown for a long time (effectively blocking)
-    key_manager._cooldown_until[target_key] = time.monotonic() + 86400  # 24 hours
-    
-    return {"status": "blocked", "key": key_suffix}
+
+    await key_manager.set_manual_block(target_key, 86400)
+    return {"status": "blocked", "key_suffix": key_suffix}
 
 
 @router.post("/keys/{key_suffix}/unblock")
 async def unblock_key(key_suffix: str):
     """Unblock a specific API key."""
-    provider = get_provider()
-    key_manager = getattr(provider, '_key_manager', None)
-    
+    provider, provider_error = _safe_get_provider()
+    if provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Provider not available: {provider_error or 'initialization failed'}",
+        )
+    key_manager = getattr(provider, "_key_manager", None)
     if not key_manager:
         raise HTTPException(status_code=500, detail="Key manager not available")
-    
-    # Find the key
-    target_key = None
-    for key in key_manager.keys:
-        if key.endswith(key_suffix):
-            target_key = key
-            break
-    
+
+    target_key = key_manager.find_key_by_suffix(key_suffix)
     if not target_key:
         raise HTTPException(status_code=404, detail="Key not found")
-    
-    # Remove cooldown
-    key_manager._cooldown_until[target_key] = 0
-    
-    return {"status": "unblocked", "key": key_suffix}
 
-
-@router.post("/chain/reorder")
-async def reorder_chain(new_order: list[str]):
-    """Reorder the model chain."""
-    provider = get_provider()
-    model_router = getattr(provider, '_model_router', None)
-    
-    if not model_router:
-        raise HTTPException(status_code=500, detail="Model router not available")
-    
-    # Verify all models are valid
-    valid_models = set(model_router._chain)
-    requested_models = set(new_order)
-    
-    if requested_models != valid_models:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid model chain. Must contain exactly the same models."
-        )
-    
-    model_router._chain = new_order
-    logger.info(f"Model chain reordered: {new_order}")
-    
-    return {"status": "reordered", "chain": new_order}
+    await key_manager.clear_manual_block(target_key)
+    return {"status": "unblocked", "key_suffix": key_suffix}
 
 
 @router.websocket("/ws")
@@ -309,7 +384,6 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive and handle incoming messages
             data = await websocket.receive_text()
             try:
                 message = json.loads(data)
@@ -325,4 +399,5 @@ async def websocket_endpoint(websocket: WebSocket):
 async def admin_index():
     """Serve the admin dashboard."""
     from fastapi.responses import FileResponse
+
     return FileResponse("static/admin/index.html")

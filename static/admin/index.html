@@ -31,7 +31,6 @@
             <button class="nav-btn active" onclick="showTab('dashboard')">Dashboard</button>
             <button class="nav-btn" onclick="showTab('logs')">Live Logs</button>
             <button class="nav-btn" onclick="showTab('keys')">API Keys</button>
-            <button class="nav-btn" onclick="showTab('models')">Model Chain</button>
         </nav>
 
         <main>
@@ -39,13 +38,27 @@
             <section id="dashboard-tab" class="tab-content active">
                 <div class="dashboard-grid">
                     <div class="card">
-                        <h3>Model Chain</h3>
-                        <div id="model-chain-list"></div>
+                        <h3>Model</h3>
+                        <div id="active-model-view"></div>
+                        <div class="model-controls">
+                            <input type="text" id="active-model-input" placeholder="Set runtime model..." list="nim-model-options">
+                            <button class="primary-btn" onclick="updateActiveModel()">Apply</button>
+                            <button class="action-btn unblock" onclick="resetActiveModel()">Reset</button>
+                        </div>
+                        <div class="model-controls">
+                            <label class="model-persist">
+                                <input type="checkbox" id="persist-model-checkbox">
+                                Persist to `.env` (MODEL)
+                            </label>
+                            <button class="action-btn" onclick="refreshModelCatalog()">Refresh Catalog</button>
+                        </div>
+                        <div id="model-update-status" class="model-status"></div>
+                        <datalist id="nim-model-options"></datalist>
                     </div>
                     
                     <div class="card">
-                        <h3>Model Health</h3>
-                        <div id="model-health-list"></div>
+                        <h3>Fallback</h3>
+                        <div id="fallback-info"></div>
                     </div>
                     
                     <div class="card">
@@ -107,15 +120,6 @@
                 </div>
             </section>
 
-            <!-- Model Chain Tab -->
-            <section id="models-tab" class="tab-content">
-                <div class="card">
-                    <h3>Model Chain Ordering</h3>
-                    <p>Drag to reorder models (primary → fallback chain)</p>
-                    <ul id="chain-list" class="chain-list"></ul>
-                    <button onclick="saveChainOrder()" class="primary-btn">Save Order</button>
-                </div>
-            </section>
         </main>
     </div>
 
