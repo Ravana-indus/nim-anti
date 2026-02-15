@@ -3,7 +3,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from api.app import app
-from api.admin import log_request
+from api.admin import log_request, request_logs
 
 
 class _MockAdminProvider:
@@ -52,6 +52,8 @@ def test_admin_status_masks_keys_and_includes_runtime():
     assert "key_full" not in data["keys"][0]
     assert data["runtime"]["max_in_flight"] == 32
     assert data["active_model"] == "runtime-model"
+    assert data["model_chain"][0] == "runtime-model"
+    assert "quick_switch_models" in data
 
 
 def test_admin_status_graceful_when_provider_init_fails():
@@ -109,7 +111,12 @@ def test_admin_logs_limit_is_clamped():
 
 def test_admin_set_model_endpoint():
     client = TestClient(app)
-    with patch("api.admin.set_active_model", return_value="new-model"):
+    sticky_provider = type(
+        "StickyProviderMock", (), {"set_sticky_model": lambda self, model: None}
+    )()
+    with patch("api.admin.set_active_model", return_value="new-model"), patch(
+        "api.admin.get_provider", return_value=sticky_provider
+    ):
         response = client.post("/admin/model", json={"model": "new-model"})
 
     assert response.status_code == 200
@@ -133,14 +140,58 @@ def test_admin_set_model_with_persist():
 
 def test_admin_reset_model_endpoint():
     client = TestClient(app)
+    sticky_provider = type(
+        "StickyProviderMock", (), {"clear_sticky_model": lambda self: None}
+    )()
     with patch("api.admin.clear_active_model_override"), patch(
         "api.admin.get_settings"
-    ) as mock_settings:
+    ) as mock_settings, patch("api.admin.get_provider", return_value=sticky_provider):
         mock_settings.return_value.model = "default-from-env"
         response = client.post("/admin/model/reset")
 
     assert response.status_code == 200
     assert response.json()["active_model"] == "default-from-env"
+
+
+def test_admin_set_model_syncs_provider_sticky_model():
+    client = TestClient(app)
+
+    class _Provider:
+        def __init__(self):
+            self.model = None
+
+        def set_sticky_model(self, model: str):
+            self.model = model
+
+    provider = _Provider()
+    with patch("api.admin.set_active_model", return_value="new-model"), patch(
+        "api.admin.get_provider", return_value=provider
+    ):
+        response = client.post("/admin/model", json={"model": "new-model"})
+
+    assert response.status_code == 200
+    assert provider.model == "new-model"
+
+
+def test_admin_reset_model_clears_provider_sticky_model():
+    client = TestClient(app)
+
+    class _Provider:
+        def __init__(self):
+            self.cleared = False
+
+        def clear_sticky_model(self):
+            self.cleared = True
+
+    provider = _Provider()
+    with patch("api.admin.clear_active_model_override"), patch(
+        "api.admin.get_settings"
+    ) as mock_settings, patch("api.admin.get_provider", return_value=provider):
+        mock_settings.return_value.model = "default-from-env"
+        response = client.post("/admin/model/reset")
+
+    assert response.status_code == 200
+    assert provider.cleared is True
 
 
 def test_admin_model_catalog_endpoint():
@@ -151,3 +202,45 @@ def test_admin_model_catalog_endpoint():
     assert "models" in payload
     assert "total" in payload
     assert len(payload["models"]) <= 50
+
+
+def test_model_performance_avg_latency_uses_success_only():
+    client = TestClient(app)
+    request_logs.clear()
+    request_logs.appendleft(
+        {
+            "timestamp": "2026-02-15T00:00:00Z",
+            "model": "m1",
+            "key_suffix": "1111",
+            "status": "success",
+            "response_time_ms": 1000.0,
+            "error": None,
+        }
+    )
+    request_logs.appendleft(
+        {
+            "timestamp": "2026-02-15T00:00:01Z",
+            "model": "m1",
+            "key_suffix": "1111",
+            "status": "failed",
+            "response_time_ms": 100000.0,
+            "error": "bad request",
+        }
+    )
+    request_logs.appendleft(
+        {
+            "timestamp": "2026-02-15T00:00:02Z",
+            "model": "m1",
+            "key_suffix": "1111",
+            "status": "fallback",
+            "response_time_ms": 2000.0,
+            "error": "Switching to m2",
+        }
+    )
+
+    response = client.get("/admin/models/performance")
+    assert response.status_code == 200
+    model = response.json()["models"][0]
+    assert model["model"] == "m1"
+    assert model["avg_latency_ms"] == 1000.0
+    assert model["avg_attempt_latency_ms"] == round((1000.0 + 100000.0 + 2000.0) / 3, 2)

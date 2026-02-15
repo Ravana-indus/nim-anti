@@ -73,6 +73,14 @@ async def test_build_request_body(nim_provider):
 
 
 @pytest.mark.asyncio
+async def test_build_request_body_applies_hard_max_tokens(nim_provider):
+    """Request max_tokens should be clamped by hard_max_tokens."""
+    req = MockRequest(max_tokens=50000)
+    body = nim_provider._build_request_body(req, stream=False)
+    assert body["max_tokens"] == nim_provider._nim_settings.hard_max_tokens
+
+
+@pytest.mark.asyncio
 async def test_stream_response_text(nim_provider):
     """Test streaming text response."""
     req = MockRequest()
@@ -200,6 +208,78 @@ async def test_complete_error_handling(nim_provider):
         with pytest.raises(APIError) as exc:
             await nim_provider.complete(req)
         assert "API Error" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_complete_model_fallback_chain_uses_next_model(nim_provider):
+    """If first model fails, provider should try next fallback model."""
+    req = MockRequest()
+
+    class _MockFailure(Exception):
+        status_code = 500
+
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {"id": "ok", "choices": []}
+
+    with (
+        patch.object(
+            nim_provider._client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            side_effect=[_MockFailure("bad model"), mock_response],
+        ) as mock_create,
+        patch.object(
+            nim_provider, "_candidate_models", return_value=["model-a", "model-b"]
+        ),
+    ):
+        result = await nim_provider.complete(req)
+
+    assert result["id"] == "ok"
+    assert mock_create.await_count == 2
+    first_call = mock_create.await_args_list[0].kwargs
+    second_call = mock_create.await_args_list[1].kwargs
+    assert first_call["model"] == "model-a"
+    assert second_call["model"] == "model-b"
+    assert nim_provider._sticky_model == "model-b"
+
+
+@pytest.mark.asyncio
+async def test_complete_bad_request_fails_fast_without_fallback(nim_provider):
+    """400/422 invalid request errors should fail fast to avoid long retry chains."""
+    req = MockRequest()
+
+    class _BadRequest(Exception):
+        status_code = 400
+
+    with (
+        patch.object(
+            nim_provider._client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            side_effect=_BadRequest("invalid request payload"),
+        ) as mock_create,
+        patch.object(
+            nim_provider, "_candidate_models", return_value=["model-a", "model-b"]
+        ),
+    ):
+        with pytest.raises(_BadRequest):
+            await nim_provider.complete(req)
+
+    # Should not keep trying fallback models for the same invalid payload.
+    assert mock_create.await_count == 1
+
+
+def test_candidate_models_prefers_sticky_working_model(nim_provider):
+    with patch(
+        "providers.nvidia_nim.client.get_model_fallback_chain",
+        return_value=["model-a", "model-b", "model-c"],
+    ):
+        nim_provider._sticky_model = "model-b"
+        assert nim_provider._candidate_models("model-a") == [
+            "model-b",
+            "model-a",
+            "model-c",
+        ]
 
 
 @pytest.mark.asyncio

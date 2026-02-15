@@ -5,6 +5,7 @@ import os
 # Opt-in to future behavior for python-telegram-bot
 os.environ["PTB_TIMEDELTA"] = "1"
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -172,6 +173,27 @@ def create_app() -> FastAPI:
     app.mount("/admin/static", StaticFiles(directory="static/admin"), name="admin-static")
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
+    # Request timeout middleware - prevents hung requests from consuming resources
+    @app.middleware("http")
+    async def timeout_middleware(request: Request, call_next):
+        """Enforce request timeout to prevent hung requests."""
+        settings = get_settings()
+        timeout_seconds = getattr(settings, 'request_timeout_seconds', 300.0)
+        try:
+            return await asyncio.wait_for(call_next(request), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            logger.error(f"Request timeout after {timeout_seconds}s: {request.method} {request.url.path}")
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": "timeout_error",
+                        "message": f"Request timed out after {timeout_seconds} seconds.",
+                    },
+                },
+            )
+
     # Middleware for logging requests to admin dashboard
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
@@ -193,6 +215,47 @@ def create_app() -> FastAPI:
     async def metrics():
         """Prometheus-compatible metrics endpoint."""
         return Response(content=telemetry.as_prometheus(), media_type="text/plain")
+
+    # Health check endpoints for orchestration (Kubernetes, Docker, etc.)
+    @app.get("/health")
+    async def health():
+        """Basic health check - always returns healthy if server is running."""
+        return {"status": "healthy", "service": "claude-code-proxy"}
+
+    @app.get("/ready")
+    async def ready():
+        """Readiness check - verifies critical dependencies are available."""
+        checks = {
+            "server": True,
+            "provider": False,
+            "key_manager": False,
+        }
+        
+        try:
+            # Check if provider is initialized
+            from .dependencies import get_provider
+            provider = get_provider()
+            checks["provider"] = provider is not None
+            
+            # Check if key manager has available keys
+            if hasattr(provider, '_key_manager'):
+                available_keys = provider._key_manager.get_available_keys()
+                checks["key_manager"] = len(available_keys) > 0
+            else:
+                checks["key_manager"] = True
+        except Exception as e:
+            logger.warning(f"Readiness check failed: {e}")
+        
+        all_ready = all(checks.values())
+        status_code = 200 if all_ready else 503
+        
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "status": "ready" if all_ready else "not_ready",
+                "checks": checks,
+            },
+        )
 
     # Exception handlers
     @app.exception_handler(ProviderError)

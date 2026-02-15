@@ -25,12 +25,19 @@
                 <span class="stat-badge" id="success-rate-stat">Success: --%</span>
                 <span class="stat-badge" id="total-requests-stat">Total: --</span>
             </div>
+            <div class="header-actions">
+                <button class="action-btn" onclick="exportLogs('csv')">Export CSV</button>
+                <button class="action-btn" onclick="toggleTheme()" id="theme-toggle">🌙</button>
+            </div>
         </header>
 
         <nav>
             <button class="nav-btn active" onclick="showTab('dashboard')">Dashboard</button>
             <button class="nav-btn" onclick="showTab('logs')">Live Logs</button>
+            <button class="nav-btn" onclick="showTab('errors')">Errors</button>
+            <button class="nav-btn" onclick="showTab('models')">Models</button>
             <button class="nav-btn" onclick="showTab('keys')">API Keys</button>
+            <button class="nav-btn" onclick="showTab('health')">Health</button>
         </nav>
 
         <main>
@@ -53,22 +60,38 @@
                             <button class="action-btn" onclick="refreshModelCatalog()">Refresh Catalog</button>
                         </div>
                         <div id="model-update-status" class="model-status"></div>
+                        <div id="quick-models" class="quick-models"></div>
                         <datalist id="nim-model-options"></datalist>
                     </div>
-                    
+
                     <div class="card">
-                        <h3>Fallback</h3>
+                        <h3>Fallback Chain</h3>
                         <div id="fallback-info"></div>
                     </div>
-                    
+
                     <div class="card">
                         <h3>API Keys</h3>
                         <div id="keys-summary"></div>
                     </div>
-                    
+
                     <div class="card">
                         <h3>Settings</h3>
                         <div id="settings-info"></div>
+                        <button class="action-btn" onclick="showSettingsEditor()" style="margin-top: 1rem;">Edit Settings</button>
+                    </div>
+                </div>
+
+                <!-- Metrics Chart Section -->
+                <div class="card" style="margin-top: 1.5rem;">
+                    <h3>Request Volume (Last Hour)</h3>
+                    <div class="chart-container">
+                        <canvas id="metrics-chart"></canvas>
+                    </div>
+                    <div class="chart-controls">
+                        <button class="action-btn" onclick="loadMetrics('15m')">15m</button>
+                        <button class="action-btn active" onclick="loadMetrics('1h')">1h</button>
+                        <button class="action-btn" onclick="loadMetrics('6h')">6h</button>
+                        <button class="action-btn" onclick="loadMetrics('24h')">24h</button>
                     </div>
                 </div>
             </section>
@@ -81,7 +104,8 @@
                     <select id="log-filter-status" onchange="filterLogs()">
                         <option value="">All Status</option>
                         <option value="success">Success</option>
-                        <option value="error">Error</option>
+                        <option value="failed">Failed</option>
+                        <option value="fallback">Fallback</option>
                     </select>
                     <span id="log-count">0 logs</span>
                 </div>
@@ -94,6 +118,7 @@
                                 <th>Key</th>
                                 <th>Status</th>
                                 <th>Response Time</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="logs-body"></tbody>
@@ -101,10 +126,60 @@
                 </div>
             </section>
 
+            <!-- Errors Tab -->
+            <section id="errors-tab" class="tab-content">
+                <div class="filter-bar">
+                    <input type="text" id="error-filter-model" placeholder="Filter by model..." onkeyup="filterErrors()">
+                    <select id="error-filter-category" onchange="filterErrors()">
+                        <option value="">All Categories</option>
+                        <option value="rate_limit">Rate Limit</option>
+                        <option value="authentication">Authentication</option>
+                        <option value="quota">Quota</option>
+                        <option value="timeout">Timeout</option>
+                        <option value="network">Network</option>
+                        <option value="model_not_found">Model Not Found</option>
+                        <option value="bad_request">Bad Request</option>
+                        <option value="unknown">Unknown</option>
+                    </select>
+                    <span id="error-count">0 errors</span>
+                </div>
+                <div class="error-summary">
+                    <div class="error-category-card" id="error-category-summary"></div>
+                </div>
+                <div class="table-container">
+                    <table id="errors-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Model</th>
+                                <th>Category</th>
+                                <th>Error</th>
+                                <th>Response Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="errors-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Models Performance Tab -->
+            <section id="models-tab" class="tab-content">
+                <div class="card">
+                    <h3>Model Performance</h3>
+                    <div id="model-performance"></div>
+                </div>
+            </section>
+
             <!-- API Keys Tab -->
             <section id="keys-tab" class="tab-content">
                 <div class="card">
-                    <h3>API Keys Management</h3>
+                    <div class="card-header">
+                        <h3>API Keys Management</h3>
+                        <div>
+                            <button class="action-btn" onclick="testAllKeys()">Test All Keys</button>
+                            <button class="action-btn" onclick="exportLogs('csv')">Export CSV</button>
+                        </div>
+                    </div>
                     <table id="keys-table">
                         <thead>
                             <tr>
@@ -112,6 +187,7 @@
                                 <th>Status</th>
                                 <th>Requests/Min</th>
                                 <th>In Flight</th>
+                                <th>Capacity</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -120,7 +196,86 @@
                 </div>
             </section>
 
+            <!-- Health Tab -->
+            <section id="health-tab" class="tab-content">
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h3>System Health</h3>
+                        <div id="system-health"></div>
+                    </div>
+                    <div class="card">
+                        <h3>Components</h3>
+                        <div id="component-health"></div>
+                    </div>
+                    <div class="card">
+                        <h3>Warnings</h3>
+                        <div id="health-warnings"></div>
+                    </div>
+                </div>
+            </section>
+
         </main>
+    </div>
+
+    <!-- Request Inspector Modal -->
+    <div id="inspector-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Request Inspector</h3>
+                <button class="modal-close" onclick="closeInspector()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="inspector-section">
+                    <h4>Request Details</h4>
+                    <pre id="inspector-request"></pre>
+                </div>
+                <div class="inspector-section">
+                    <h4>Response</h4>
+                    <pre id="inspector-response"></pre>
+                </div>
+                <div class="inspector-section">
+                    <h4>Error (if any)</h4>
+                    <pre id="inspector-error"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Editor Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Settings Editor</h3>
+                <button class="modal-close" onclick="closeSettingsModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-notice">
+                    ⚠️ Settings are configured via .env file. Changes require server restart.
+                </div>
+                <div class="settings-form">
+                    <div class="form-group">
+                        <label>Rate Limit (req/window)</label>
+                        <input type="number" id="setting-rate-limit" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Rate Window (seconds)</label>
+                        <input type="number" id="setting-rate-window" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Cooldown (seconds)</label>
+                        <input type="number" id="setting-cooldown" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Max In Flight</label>
+                        <input type="number" id="setting-max-inflight" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Active Model</label>
+                        <input type="text" id="setting-model" disabled>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="/admin/static/admin.js"></script>

@@ -13,6 +13,7 @@ class NimSettings(BaseSettings):
     top_p: float = Field(1.0, ge=0.0, le=1.0)
     top_k: int = -1
     max_tokens: int = Field(81920, ge=1)
+    hard_max_tokens: int = Field(8192, ge=1)
     presence_penalty: float = Field(0.0, ge=-2.0, le=2.0)
     frequency_penalty: float = Field(0.0, ge=-2.0, le=2.0)
 

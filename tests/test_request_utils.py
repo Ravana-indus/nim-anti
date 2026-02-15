@@ -147,6 +147,21 @@ class TestTitleGenerationRequest:
 
         assert is_title_generation_request(req) is True
 
+    def test_title_generation_summarize_for_conversation_title(self):
+        """Detect summarize-style title generation prompts."""
+        msg = MagicMock(spec=Message)
+        msg.role = "user"
+        msg.content = (
+            "Summarize the following user request in 140 characters or less.\n"
+            "Your result will be used as the conversation title.\n\n"
+            "User request:\nhi\n\nSummary:"
+        )
+
+        req = MagicMock(spec=MessagesRequest)
+        req.messages = [msg]
+
+        assert is_title_generation_request(req) is True
+
     def test_not_title_generation_no_phrase(self):
         """Test not title generation without target phrase."""
         msg = MagicMock(spec=Message)

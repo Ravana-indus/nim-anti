@@ -7,6 +7,7 @@ from providers.model_utils import (
     get_original_model,
     resolve_model_alias,
 )
+from config.settings import get_model_fallback_chain, get_settings
 
 
 def test_strip_provider_prefixes():
@@ -75,6 +76,19 @@ def test_normalize_model_name_non_claude_alias_resolution(monkeypatch):
         lambda: ["stepfun-ai/step-3.5-flash"],
     )
     assert normalize_model_name("step-3.5-flash", "unused") == "stepfun-ai/step-3.5-flash"
+
+
+def test_get_model_fallback_chain_primary_first(monkeypatch):
+    monkeypatch.setenv("NVIDIA_NIM_FALLBACK_MODELS", "model-a,model-b,model-c")
+    get_settings.cache_clear()
+    try:
+        assert get_model_fallback_chain("model-b") == [
+            "model-b",
+            "model-a",
+            "model-c",
+        ]
+    finally:
+        get_settings.cache_clear()
 
 
 # --- Parametrized Edge Case Tests ---

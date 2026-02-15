@@ -39,7 +39,15 @@ def get_provider() -> BaseProvider:
                 rate_window=settings.nvidia_nim_rate_window,
                 key_cooldown_sec=settings.nvidia_nim_key_cooldown_seconds,
                 max_in_flight=settings.nvidia_nim_max_in_flight,
+                request_timeout_sec=settings.nvidia_nim_request_timeout_seconds,
+                openai_max_retries=settings.nvidia_nim_openai_max_retries,
                 nim_settings=settings.nim,
+                # Circuit breaker settings
+                circuit_breaker_threshold=getattr(settings, 'circuit_breaker_threshold', 5),
+                circuit_breaker_recovery=getattr(settings, 'circuit_breaker_recovery_timeout', 30.0),
+                # HTTP connection pooling
+                max_connections=getattr(settings, 'http_max_connections', 100),
+                max_keepalive_connections=getattr(settings, 'http_max_keepalive_connections', 20),
             )
             _provider = NvidiaNimProvider(config)
         else:

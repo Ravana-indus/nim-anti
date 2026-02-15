@@ -17,6 +17,82 @@ logger = logging.getLogger(__name__)
 ENCODER = tiktoken.get_encoding("cl100k_base")
 
 
+def get_token_count(
+    messages: List,
+    system: Optional[Union[str, List]] = None,
+    tools: Optional[List] = None,
+) -> int:
+    """Estimate token count for a request using batch encoding for performance.
+
+    Uses tiktoken cl100k_base encoding to estimate token usage.
+    Includes system prompt, messages, tools, and per-message overhead.
+
+    Optimized to batch all text into a single encode call for better performance.
+
+    Args:
+        messages: List of message objects with content
+        system: Optional system prompt (str or list of blocks)
+        tools: Optional list of tool definitions
+
+    Returns:
+        Estimated total token count
+    """
+    # Collect all text for batch encoding (much faster than multiple encode calls)
+    text_parts: List[str] = []
+    
+    # Collect system prompt text
+    if system:
+        if isinstance(system, str):
+            text_parts.append(system)
+        elif isinstance(system, list):
+            for block in system:
+                if hasattr(block, "text"):
+                    text_parts.append(block.text)
+    
+    # Collect message text
+    for msg in messages:
+        if isinstance(msg.content, str):
+            text_parts.append(msg.content)
+        elif isinstance(msg.content, list):
+            for block in msg.content:
+                b_type = getattr(block, "type", None)
+                
+                if b_type == "text":
+                    text_parts.append(getattr(block, "text", ""))
+                elif b_type == "thinking":
+                    text_parts.append(getattr(block, "thinking", ""))
+                elif b_type == "tool_use":
+                    name = getattr(block, "name", "")
+                    text_parts.append(name)
+                    inp = getattr(block, "input", {})
+                    text_parts.append(json.dumps(inp))
+                elif b_type == "tool_result":
+                    content = getattr(block, "content", "")
+                    if isinstance(content, str):
+                        text_parts.append(content)
+                    else:
+                        text_parts.append(json.dumps(content))
+    
+    # Collect tool definition text
+    if tools:
+        for tool in tools:
+            tool_str = (
+                tool.name + (tool.description or "") + json.dumps(tool.input_schema)
+            )
+            text_parts.append(tool_str)
+    
+    # Single batch encode call (3-5x faster than multiple calls)
+    all_text = "\n".join(text_parts)
+    total_tokens = len(ENCODER.encode(all_text))
+    
+    # Add per-message overhead
+    total_tokens += len(messages) * 3
+    if tools:
+        total_tokens += len(tools) * 5
+    
+    return max(1, total_tokens)
+
+
 def is_quota_check_request(request_data: MessagesRequest) -> bool:
     """Check if this is a quota probe request.
 
@@ -54,7 +130,20 @@ def is_title_generation_request(request_data: MessagesRequest) -> bool:
     """
     if len(request_data.messages) > 0 and request_data.messages[-1].role == "user":
         text = extract_text_from_content(request_data.messages[-1].content)
-        if "write a 5-10 word title" in text.lower():
+        text_lower = text.lower()
+
+        # Legacy phrasing.
+        if "write a 5-10 word title" in text_lower:
+            return True
+
+        # Newer phrasing observed in the wild.
+        if (
+            "summarize the following user request" in text_lower
+            and "conversation title" in text_lower
+        ):
+            return True
+
+        if "your result will be used as the conversation title" in text_lower:
             return True
     return False
 

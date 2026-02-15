@@ -1,9 +1,19 @@
 """SSE event builder for Anthropic-format streaming responses."""
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Iterator
+
+try:
+    import orjson
+    def _json_dumps(obj: Any) -> str:
+        """Fast JSON serialization using orjson."""
+        return orjson.dumps(obj).decode()
+except ImportError:
+    import json
+    def _json_dumps(obj: Any) -> str:
+        """Fallback to standard json."""
+        return json.dumps(obj)
 
 try:
     import tiktoken
@@ -21,6 +31,10 @@ STOP_REASON_MAP = {
     "tool_calls": "tool_use",
     "content_filter": "end_turn",
 }
+
+# Pre-built SSE templates for static events (avoid repeated string formatting)
+_SSE_TEMPLATE_MESSAGE_STOP = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+_SSE_TEMPLATE_DONE = "[DONE]\n\n"
 
 
 def map_stop_reason(openai_reason: Optional[str]) -> str:
@@ -63,8 +77,8 @@ class SSEBuilder:
         self._accumulated_reasoning = ""
 
     def _format_event(self, event_type: str, data: Dict[str, Any]) -> str:
-        """Format as SSE string."""
-        event_str = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+        """Format as SSE string using fast JSON serialization."""
+        event_str = f"event: {event_type}\ndata: {_json_dumps(data)}\n\n"
         logger.debug(f"SSE_EVENT: {event_type} - {event_str.strip()}")
         return event_str
 
@@ -100,12 +114,12 @@ class SSEBuilder:
         )
 
     def message_stop(self) -> str:
-        """Generate message_stop event."""
-        return self._format_event("message_stop", {"type": "message_stop"})
+        """Generate message_stop event using cached template."""
+        return _SSE_TEMPLATE_MESSAGE_STOP
 
     def done(self) -> str:
-        """Generate [DONE] marker."""
-        return "[DONE]\n\n"
+        """Generate [DONE] marker using cached template."""
+        return _SSE_TEMPLATE_DONE
 
     # Content block events
     def content_block_start(self, index: int, block_type: str, **kwargs) -> str:

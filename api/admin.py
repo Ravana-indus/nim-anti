@@ -3,12 +3,13 @@
 import asyncio
 import json
 from pathlib import Path
-from collections import deque
-from dataclasses import asdict, dataclass
-from datetime import datetime
-from typing import Deque, Optional
+from collections import deque, defaultdict
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta
+from typing import Deque, Optional, Any
+from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
 from pydantic import BaseModel
 
 from .dependencies import get_provider
@@ -16,6 +17,8 @@ from .telemetry import telemetry
 from config.settings import (
     clear_active_model_override,
     get_active_model,
+    get_configured_fallback_models,
+    get_model_fallback_chain,
     get_settings,
     has_active_model_override,
     persist_model_to_env,
@@ -26,6 +29,13 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 # In-memory request log buffer (last 1000 requests).
 request_logs: Deque[dict] = deque(maxlen=1000)
+
+# Detailed request storage for inspector (last 500 requests with full details)
+request_details: Deque[dict] = deque(maxlen=500)
+
+# Time-series metrics for charts (last 24 hours, bucketed by minute)
+metrics_history: list[dict] = []
+metrics_lock = asyncio.Lock()
 
 
 class ConnectionManager:
@@ -74,8 +84,12 @@ def _load_model_catalog() -> list[str]:
     if _model_catalog_cache is not None:
         return _model_catalog_cache
 
-    catalog_path = Path("nvidia_nim_models.json")
-    if not catalog_path.exists():
+    candidate_paths = [
+        Path(__file__).resolve().parents[1] / "nvidia_nim_models.json",
+        Path("nvidia_nim_models.json"),
+    ]
+    catalog_path = next((p for p in candidate_paths if p.exists()), None)
+    if catalog_path is None:
         _model_catalog_cache = []
         return _model_catalog_cache
 
@@ -216,6 +230,8 @@ async def get_status():
     snapshot = await _provider_snapshot(provider)
 
     active_model = get_active_model()
+    configured_fallback_models = get_configured_fallback_models()
+    model_chain = get_model_fallback_chain(active_model)
     health = snapshot.get("health", {})
     if not health:
         health = _legacy_health_from_telemetry(active_model)
@@ -225,7 +241,10 @@ async def get_status():
         "default_model": settings.model,
         "has_runtime_model_override": has_active_model_override(),
         # Backward compatibility for older dashboard JS.
-        "model_chain": [active_model],
+        "model_chain": model_chain,
+        "fallback_models": model_chain,
+        "configured_fallback_models": configured_fallback_models,
+        "quick_switch_models": configured_fallback_models,
         "keys": snapshot.get("keys", []),
         "health": health,
         "runtime": snapshot.get("runtime", {}),
@@ -236,6 +255,9 @@ async def get_status():
             "rate_window": settings.nvidia_nim_rate_window,
             "cooldown_seconds": settings.nvidia_nim_key_cooldown_seconds,
             "max_in_flight": settings.nvidia_nim_max_in_flight,
+            "request_timeout_sec": settings.nvidia_nim_request_timeout_seconds,
+            "openai_max_retries": settings.nvidia_nim_openai_max_retries,
+            "hard_max_tokens": settings.nim.hard_max_tokens,
         },
     }
 
@@ -261,14 +283,52 @@ async def get_keys():
     return {"keys": snapshot.get("keys", [])}
 
 
+@router.get("/circuit-breaker")
+async def get_circuit_breaker():
+    """Get circuit breaker status for monitoring."""
+    provider, provider_error = _safe_get_provider()
+    if provider is None:
+        return {
+            "status": "unavailable",
+            "error": provider_error,
+        }
+    
+    if hasattr(provider, "get_circuit_breaker_status"):
+        return provider.get_circuit_breaker_status()
+    
+    return {
+        "status": "not_implemented",
+        "message": "Circuit breaker not available for this provider",
+    }
+
+
+@router.post("/circuit-breaker/reset")
+async def reset_circuit_breaker():
+    """Manually reset the circuit breaker."""
+    provider, provider_error = _safe_get_provider()
+    if provider is None:
+        raise HTTPException(status_code=503, detail=f"Provider unavailable: {provider_error}")
+    
+    if hasattr(provider, "reset_circuit_breaker"):
+        await provider.reset_circuit_breaker()
+        return {"status": "reset", "message": "Circuit breaker has been reset"}
+    
+    raise HTTPException(status_code=400, detail="Circuit breaker not available for this provider")
+
+
 @router.get("/model")
 async def get_model():
     """Get active model configuration."""
     settings = get_settings()
+    active_model = get_active_model()
+    configured_fallback_models = get_configured_fallback_models()
     return {
-        "active_model": get_active_model(),
+        "active_model": active_model,
         "default_model": settings.model,
         "has_runtime_model_override": has_active_model_override(),
+        "fallback_models": get_model_fallback_chain(active_model),
+        "configured_fallback_models": configured_fallback_models,
+        "quick_switch_models": configured_fallback_models,
     }
 
 
@@ -291,6 +351,9 @@ async def set_model(payload: ActiveModelUpdateRequest):
     """Set active runtime model for new requests."""
     try:
         model = set_active_model(payload.model)
+        provider, _ = _safe_get_provider()
+        if provider is not None and hasattr(provider, "set_sticky_model"):
+            provider.set_sticky_model(model)
         if payload.persist:
             persist_model_to_env(model)
         return {
@@ -307,6 +370,9 @@ async def set_model(payload: ActiveModelUpdateRequest):
 async def reset_model():
     """Reset model selection to default MODEL from settings."""
     clear_active_model_override()
+    provider, _ = _safe_get_provider()
+    if provider is not None and hasattr(provider, "clear_sticky_model"):
+        provider.clear_sticky_model()
     settings = get_settings()
     return {
         "status": "reset",
@@ -401,3 +467,400 @@ async def admin_index():
     from fastapi.responses import FileResponse
 
     return FileResponse("static/admin/index.html")
+
+
+# =============================================================================
+# Phase 1: Request Inspector & Error Analysis
+# =============================================================================
+
+class RequestDetailUpdate(BaseModel):
+    """Extended request details for logging."""
+    request_id: str
+    request_body: Optional[str] = None
+    response_body: Optional[str] = None
+    headers: Optional[dict] = None
+
+
+def log_request_detail(
+    model: str,
+    key: str,
+    status: str,
+    response_time_ms: float,
+    error: Optional[str] = None,
+    request_body: Optional[str] = None,
+    response_body: Optional[str] = None,
+):
+    """Log detailed request for inspector."""
+    request_id = str(uuid4().hex[:12])
+    entry = {
+        "request_id": request_id,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "model": model,
+        "key_suffix": key[-4:] if len(key) >= 4 else key,
+        "status": status,
+        "response_time_ms": response_time_ms,
+        "error": error,
+        "request_body": request_body,
+        "response_body": response_body,
+    }
+    request_details.appendleft(entry)
+    return request_id
+
+
+@router.get("/requests/{request_id}")
+async def get_request_details(request_id: str):
+    """Get detailed request information for inspector."""
+    for req in request_details:
+        if req.get("request_id") == request_id:
+            return {"request": req}
+    raise HTTPException(status_code=404, detail="Request not found")
+
+
+@router.get("/errors")
+async def get_errors(
+    model: Optional[str] = None,
+    limit: int = Query(default=100, le=500),
+):
+    """Get error analysis with categorization."""
+    errors = []
+    for log in request_logs:
+        if log.get("status") in ("error", "failed"):
+            if model and log.get("model") != model:
+                continue
+            error_msg = log.get("error", "") or ""
+            # Categorize errors
+            category = "unknown"
+            if "rate" in error_msg.lower() or "429" in error_msg:
+                category = "rate_limit"
+            elif "auth" in error_msg.lower() or "401" in error_msg or "api key" in error_msg.lower():
+                category = "authentication"
+            elif "quota" in error_msg.lower() or "limit" in error_msg.lower():
+                category = "quota"
+            elif "timeout" in error_msg.lower() or "504" in error_msg:
+                category = "timeout"
+            elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                category = "network"
+            elif "model" in error_msg.lower() or "not found" in error_msg.lower():
+                category = "model_not_found"
+            elif "invalid" in error_msg.lower() or "400" in error_msg:
+                category = "bad_request"
+            
+            errors.append({
+                **log,
+                "category": category,
+            })
+    
+    # Aggregate by category
+    by_category: dict[str, int] = defaultdict(int)
+    for e in errors:
+        by_category[e["category"]] += 1
+    
+    return {
+        "errors": errors[:limit],
+        "total": len(errors),
+        "by_category": dict(by_category),
+    }
+
+
+# =============================================================================
+# Phase 1: Metrics History for Charts
+# =============================================================================
+
+@router.get("/metrics/history")
+async def get_metrics_history(
+    period: str = Query(default="1h", regex="^(15m|1h|6h|24h)$"),
+):
+    """Get time-series metrics for charts."""
+    now = datetime.utcnow()
+    if period == "15m":
+        cutoff = now - timedelta(minutes=15)
+    elif period == "1h":
+        cutoff = now - timedelta(hours=1)
+    elif period == "6h":
+        cutoff = now - timedelta(hours=6)
+    else:
+        cutoff = now - timedelta(hours=24)
+    
+    # Generate bucket data from request logs
+    buckets: dict[str, dict] = {}
+    for log in request_logs:
+        if log.get("status") == "success":
+            ts = log.get("timestamp", "")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if dt.replace(tzinfo=None) >= cutoff:
+                        bucket_key = dt.strftime("%H:%M")
+                        if bucket_key not in buckets:
+                            buckets[bucket_key] = {
+                                "timestamp": bucket_key,
+                                "requests": 0,
+                                "success": 0,
+                                "failed": 0,
+                                "fallback": 0,
+                                "latency_sum": 0.0,
+                            }
+                        buckets[bucket_key]["requests"] += 1
+                        buckets[bucket_key][log.get("status")] += 1
+                        buckets[bucket_key]["latency_sum"] += log.get("response_time_ms", 0)
+                except ValueError:
+                    pass
+    
+    # Convert to list with averages
+    result = []
+    for key in sorted(buckets.keys()):
+        b = buckets[key]
+        b["avg_latency_ms"] = round(b["latency_sum"] / b["requests"], 2) if b["requests"] > 0 else 0
+        del b["latency_sum"]
+        result.append(b)
+    
+    return {
+        "period": period,
+        "data": result,
+    }
+
+
+# =============================================================================
+# Phase 1: Model Performance Stats
+# =============================================================================
+
+@router.get("/models/performance")
+async def get_model_performance():
+    """Get per-model performance statistics."""
+    model_stats: dict[str, dict] = defaultdict(lambda: {
+        "total": 0,
+        "success": 0,
+        "failed": 0,
+        "fallback": 0,
+        "latency_sum": 0.0,
+        "success_latency_sum": 0.0,
+        "success_count": 0,
+        "errors": [],
+    })
+    
+    for log in request_logs:
+        model = log.get("model", "unknown")
+        status = log.get("status", "unknown")
+        latency = log.get("response_time_ms", 0)
+        
+        stats = model_stats[model]
+        stats["total"] += 1
+        if status in ("success", "failed", "fallback"):
+            stats[status] += 1
+        stats["latency_sum"] += latency
+        if status == "success":
+            stats["success_latency_sum"] += latency
+            stats["success_count"] += 1
+        if status in ("error", "failed") and log.get("error"):
+            if len(stats["errors"]) < 5:  # Keep top 5 errors
+                stats["errors"].append(log.get("error", "")[:200])
+    
+    result = []
+    for model, stats in model_stats.items():
+        total = stats["total"]
+        success_rate = round((stats["success"] / total * 100) if total > 0 else 0, 1)
+        avg_latency = (
+            round(stats["success_latency_sum"] / stats["success_count"], 2)
+            if stats["success_count"] > 0
+            else 0
+        )
+        avg_attempt_latency = round(stats["latency_sum"] / total, 2) if total > 0 else 0
+
+        result.append({
+            "model": model,
+            "total_requests": total,
+            "success": stats["success"],
+            "failed": stats["failed"],
+            "fallback": stats["fallback"],
+            "success_rate": success_rate,
+            "avg_latency_ms": avg_latency,
+            "avg_attempt_latency_ms": avg_attempt_latency,
+            "recent_errors": stats["errors"],
+        })
+    
+    # Sort by total requests descending
+    result.sort(key=lambda x: x["total_requests"], reverse=True)
+    
+    return {"models": result}
+
+
+# =============================================================================
+# Phase 1: Settings Editor
+# =============================================================================
+
+class SettingsUpdateRequest(BaseModel):
+    """Settings update request."""
+    rate_limit: Optional[int] = None
+    rate_window: Optional[int] = None
+    cooldown_seconds: Optional[int] = None
+    max_in_flight: Optional[int] = None
+
+
+@router.get("/settings")
+async def get_settings_info():
+    """Get current settings for editor."""
+    settings = get_settings()
+    return {
+        "rate_limit": settings.nvidia_nim_rate_limit,
+        "rate_window": settings.nvidia_nim_rate_window,
+        "cooldown_seconds": settings.nvidia_nim_key_cooldown_seconds,
+        "max_in_flight": settings.nvidia_nim_max_in_flight,
+        "request_timeout_sec": settings.nvidia_nim_request_timeout_seconds,
+        "openai_max_retries": settings.nvidia_nim_openai_max_retries,
+        "hard_max_tokens": settings.nim.hard_max_tokens,
+        "model": settings.model,
+        "fallback_models": settings.nvidia_nim_fallback_models,
+    }
+
+
+@router.post("/settings")
+async def update_settings(payload: SettingsUpdateRequest):
+    """Update runtime settings (Note: changes are temporary, not persisted to .env)."""
+    # Settings are read-only at runtime for safety
+    # This endpoint returns current settings with confirmation
+    settings = get_settings()
+    return {
+        "status": "read_only",
+        "message": "Settings are configured via .env file. Restart server after editing .env.",
+        "current": {
+            "rate_limit": settings.nvidia_nim_rate_limit,
+            "rate_window": settings.nvidia_nim_rate_window,
+            "cooldown_seconds": settings.nvidia_nim_key_cooldown_seconds,
+            "max_in_flight": settings.nvidia_nim_max_in_flight,
+        },
+    }
+
+
+# =============================================================================
+# Phase 2: Active Connections & System Health
+# =============================================================================
+
+@router.get("/health/detailed")
+async def get_detailed_health():
+    """Get detailed system health diagnostics."""
+    provider, provider_error = _safe_get_provider()
+    settings = get_settings()
+    
+    health = {
+        "status": "healthy",
+        "components": {
+            "provider": {
+                "status": "healthy" if provider else "unavailable",
+                "error": provider_error,
+            },
+            "telemetry": {
+                "status": "healthy",
+                "total_requests": telemetry.snapshot()["http"]["total_requests"],
+            },
+            "websocket": {
+                "status": "healthy",
+                "active_connections": len(manager.active_connections),
+            },
+            "storage": {
+                "status": "healthy",
+                "request_logs_count": len(request_logs),
+                "request_details_count": len(request_details),
+            },
+        },
+        "configuration": {
+            "model": get_active_model(),
+            "rate_limit": settings.nvidia_nim_rate_limit,
+            "rate_window": settings.nvidia_nim_rate_window,
+        },
+    }
+    
+    # Check for warnings
+    warnings = []
+    if provider_error:
+        warnings.append(f"Provider error: {provider_error}")
+    if len(manager.active_connections) == 0:
+        warnings.append("No active WebSocket connections")
+    
+    if warnings:
+        health["status"] = "degraded"
+        health["warnings"] = warnings
+    
+    return health
+
+
+# =============================================================================
+# Phase 3: Fallback Chain & Key Management
+# =============================================================================
+
+@router.post("/fallback-order")
+async def update_fallback_order(models: list[str]):
+    """Update fallback model order (runtime only)."""
+    # This would require modifying settings at runtime
+    return {
+        "status": "not_implemented",
+        "message": "Fallback order is configured via NVIDIA_NIM_FALLBACK_MODELS in .env",
+        "current": get_configured_fallback_models(),
+    }
+
+
+@router.post("/keys/test")
+async def test_all_keys():
+    """Test all API keys and return health status."""
+    provider, _ = _safe_get_provider()
+    if not provider:
+        raise HTTPException(status_code=503, detail="Provider not available")
+    
+    key_manager = getattr(provider, "_key_manager", None)
+    if not key_manager:
+        raise HTTPException(status_code=500, detail="Key manager not available")
+    
+    results = []
+    for key in key_manager.keys:
+        key_suffix = key[-4:] if len(key) >= 4 else key
+        is_blocked = getattr(key_manager, "_is_blocked", lambda k: False)(key)
+        cooldown = getattr(key_manager, "_get_cooldown", lambda k: 0)(key)
+        
+        results.append({
+            "key_suffix": key_suffix,
+            "key_masked": f"{key[:8]}****{key[-4:]}",
+            "blocked": is_blocked,
+            "cooldown_remaining_seconds": cooldown,
+            "healthy": not is_blocked and cooldown == 0,
+        })
+    
+    return {"keys": results}
+
+
+# =============================================================================
+# Phase 4: Export & Utilities
+# =============================================================================
+
+@router.get("/export/logs")
+async def export_logs(format: str = Query(default="json", regex="^(json|csv)$")):
+    """Export request logs in specified format."""
+    logs = list(request_logs)
+    
+    if format == "csv":
+        import csv
+        import io
+        
+        output = io.StringIO()
+        if logs:
+            writer = csv.DictWriter(output, fieldnames=logs[0].keys())
+            writer.writeheader()
+            writer.writerows(logs)
+        
+        from fastapi.responses import Response
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=ccnim-logs.csv"},
+        )
+    
+    return {"logs": logs}
+
+
+@router.get("/export/metrics")
+async def export_metrics():
+    """Export current metrics snapshot."""
+    snapshot = telemetry.snapshot()
+    return {
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "telemetry": snapshot,
+        "aggregate": _aggregate_from_logs(),
+    }

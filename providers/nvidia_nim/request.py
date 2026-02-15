@@ -83,6 +83,9 @@ def build_request_body(
         max_tokens = nim.max_tokens
     elif nim.max_tokens:
         max_tokens = min(max_tokens, nim.max_tokens)
+    hard_cap = getattr(nim, "hard_max_tokens", None)
+    if hard_cap:
+        max_tokens = min(max_tokens, hard_cap)
     _set_if_not_none(body, "max_tokens", max_tokens)
 
     req_temperature = getattr(request_data, "temperature", None)

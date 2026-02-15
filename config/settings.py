@@ -15,6 +15,16 @@ load_dotenv()
 
 # Fixed base URL for NVIDIA NIM
 NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+DEFAULT_NIM_MODEL_FALLBACK_ORDER = [
+    "z-ai/glm5",
+    "moonshotai/kimi-k2.5",
+    "minimaxai/minimax-m2.1",
+    "stepfun-ai/step-3.5-flash",
+    "qwen/qwen3-next-80b-a3b-instruct",
+    "qwen/qwen3-coder-480b-a35b-instruct",
+    "sarvamai/sarvam-m",
+    "deepseek-ai/deepseek-v3_2",
+]
 
 
 class Settings(BaseSettings):
@@ -34,11 +44,16 @@ class Settings(BaseSettings):
     # ==================== Model Selection ====================
     # Backward-compatible single target model for Claude mapping.
     model: str = "moonshotai/kimi-k2.5"
+    # Ordered model fallback chain. Comma-separated in env var.
+    nvidia_nim_fallback_models: str = ",".join(DEFAULT_NIM_MODEL_FALLBACK_ORDER)
     # ==================== Rate Limiting (per-key) ====================
     nvidia_nim_rate_limit: int = 40
     nvidia_nim_rate_window: int = 60
     nvidia_nim_key_cooldown_seconds: int = 60
     nvidia_nim_max_in_flight: int = 32
+    # Upstream request controls to prevent multi-minute retry cascades.
+    nvidia_nim_request_timeout_seconds: float = 120.0
+    nvidia_nim_openai_max_retries: int = 0
 
     # ==================== Fast Prefix Detection ====================
     fast_prefix_detection: bool = True
@@ -63,6 +78,15 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8085
     log_file: str = "server.log"
+    request_timeout_seconds: float = 300.0  # 5 minutes default for request timeout middleware
+
+    # ==================== Circuit Breaker ====================
+    circuit_breaker_threshold: int = 5
+    circuit_breaker_recovery_timeout: float = 30.0
+
+    # ==================== HTTP Connection Pooling ====================
+    http_max_connections: int = 100
+    http_max_keepalive_connections: int = 20
 
     # Handle empty strings for optional string fields
     @field_validator(
@@ -95,15 +119,19 @@ _active_model_override: Optional[str] = None
 
 def get_active_model() -> str:
     """Get currently active model (runtime override or configured default)."""
+    from providers.model_utils import resolve_model_alias
+
     with _active_model_lock:
         if _active_model_override:
-            return _active_model_override
-    return get_settings().model
+            return resolve_model_alias(_active_model_override)
+    return resolve_model_alias(get_settings().model)
 
 
 def set_active_model(model: str) -> str:
     """Set active model override at runtime."""
-    normalized = model.strip()
+    from providers.model_utils import resolve_model_alias
+
+    normalized = resolve_model_alias(model.strip())
     if not normalized:
         raise ValueError("model cannot be empty")
     with _active_model_lock:
@@ -127,7 +155,9 @@ def has_active_model_override() -> bool:
 
 def persist_model_to_env(model: str, env_path: str = ".env") -> str:
     """Persist MODEL to .env and refresh cached settings."""
-    normalized = model.strip()
+    from providers.model_utils import resolve_model_alias
+
+    normalized = resolve_model_alias(model.strip())
     if not normalized:
         raise ValueError("model cannot be empty")
 
@@ -154,3 +184,28 @@ def persist_model_to_env(model: str, env_path: str = ".env") -> str:
     path.write_text("\n".join(updated) + "\n", encoding="utf-8")
     get_settings.cache_clear()
     return normalized
+
+
+def get_configured_fallback_models() -> list[str]:
+    """Get configured fallback model order with canonical IDs."""
+    from providers.model_utils import resolve_model_alias
+
+    raw = get_settings().nvidia_nim_fallback_models
+    models = [resolve_model_alias(part.strip()) for part in raw.split(",") if part.strip()]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for model in models:
+        if model not in seen:
+            deduped.append(model)
+            seen.add(model)
+    return deduped
+
+
+def get_model_fallback_chain(primary_model: Optional[str] = None) -> list[str]:
+    """Get effective model attempt order with active/request model first."""
+    from providers.model_utils import resolve_model_alias
+
+    primary = resolve_model_alias((primary_model or get_active_model()).strip())
+    configured = get_configured_fallback_models()
+    return [primary] + [model for model in configured if model != primary]

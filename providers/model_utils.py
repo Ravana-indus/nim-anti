@@ -19,8 +19,13 @@ _CLAUDE_IDENTIFIERS = ["haiku", "sonnet", "opus", "claude"]
 @lru_cache(maxsize=1)
 def _load_nim_model_catalog() -> list[str]:
     """Load local NVIDIA model IDs from nvidia_nim_models.json."""
-    catalog_path = Path("nvidia_nim_models.json")
-    if not catalog_path.exists():
+    # Resolve relative to project root first, then cwd as a fallback.
+    candidate_paths = [
+        Path(__file__).resolve().parents[1] / "nvidia_nim_models.json",
+        Path("nvidia_nim_models.json"),
+    ]
+    catalog_path = next((p for p in candidate_paths if p.exists()), None)
+    if catalog_path is None:
         return []
 
     try:

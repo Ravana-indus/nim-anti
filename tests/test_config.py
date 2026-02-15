@@ -89,6 +89,10 @@ class TestNimSettingsValidBounds:
         s = NimSettings(max_tokens=1)
         assert s.max_tokens == 1
 
+    def test_hard_max_tokens_valid(self):
+        s = NimSettings(hard_max_tokens=512)
+        assert s.hard_max_tokens == 512
+
     def test_min_tokens_valid(self):
         s = NimSettings(min_tokens=0)
         assert s.min_tokens == 0
@@ -145,6 +149,11 @@ class TestNimSettingsInvalidBounds:
     def test_max_tokens_too_low(self, max_tokens):
         with pytest.raises(ValidationError):
             NimSettings(max_tokens=max_tokens)
+
+    @pytest.mark.parametrize("hard_max_tokens", [0, -1])
+    def test_hard_max_tokens_too_low(self, hard_max_tokens):
+        with pytest.raises(ValidationError):
+            NimSettings(hard_max_tokens=hard_max_tokens)
 
     def test_min_tokens_negative(self):
         with pytest.raises(ValidationError):

@@ -22,7 +22,17 @@ class ProviderConfig(BaseModel):
     rate_window: int = 60
     key_cooldown_sec: int = 60
     max_in_flight: int = 32
+    request_timeout_sec: float = 120.0
+    openai_max_retries: int = 0
     nim_settings: NimSettings = Field(default_factory=NimSettings)
+    
+    # Circuit breaker settings
+    circuit_breaker_threshold: int = 5
+    circuit_breaker_recovery: float = 30.0
+    
+    # HTTP connection pooling
+    max_connections: int = 100
+    max_keepalive_connections: int = 20
 
 
 class BaseProvider(ABC):
