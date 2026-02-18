@@ -956,6 +956,12 @@
             "owned_by": "qwen"
         },
         {
+            "id": "qwen/qwen3.5-397b-a17b",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "qwen"
+        },
+        {
             "id": "qwen/qwen3-coder-480b-a35b-instruct",
             "object": "model",
             "created": 735790403,
