@@ -22,6 +22,7 @@ DEFAULT_NIM_MODEL_FALLBACK_ORDER = [
     "stepfun-ai/step-3.5-flash",
     "qwen/qwen3-next-80b-a3b-instruct",
     "qwen/qwen3-coder-480b-a35b-instruct",
+    "qwen/qwen3.5-397b-a17b",
     "sarvamai/sarvam-m",
     "deepseek-ai/deepseek-v3_2",
 ]

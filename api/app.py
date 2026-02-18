@@ -222,6 +222,12 @@ def create_app() -> FastAPI:
         """Basic health check - always returns healthy if server is running."""
         return {"status": "healthy", "service": "claude-code-proxy"}
 
+    @app.get("/admin", include_in_schema=False)
+    async def admin_redirect():
+        """Redirect /admin to /admin/ for admin dashboard."""
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/admin/", status_code=301)
+
     @app.get("/ready")
     async def ready():
         """Readiness check - verifies critical dependencies are available."""
