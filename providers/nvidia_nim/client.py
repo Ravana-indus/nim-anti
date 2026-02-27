@@ -326,6 +326,9 @@ class NvidiaNimProvider(BaseProvider):
                                 for event in sse.ensure_thinking_block():
                                     yield event
                                 yield sse.emit_thinking_delta(reasoning)
+                                # Skip ThinkTagParser if we already handled reasoning_content
+                                # to avoid duplicate thinking output
+                                continue
 
                             if delta.content:
                                 for part in think_parser.feed(delta.content):
