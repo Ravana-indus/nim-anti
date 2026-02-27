@@ -488,6 +488,12 @@
             "owned_by": "minimaxai"
         },
         {
+            "id": "minimaxai/minimax-m2.5",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "minimaxai"
+        },
+        {
             "id": "mistralai/codestral-22b-instruct-v0.1",
             "object": "model",
             "created": 735790403,

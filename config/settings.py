@@ -19,6 +19,7 @@ DEFAULT_NIM_MODEL_FALLBACK_ORDER = [
     "z-ai/glm5",
     "moonshotai/kimi-k2.5",
     "minimaxai/minimax-m2.1",
+    "minimaxai/minimax-m2.5",
     "stepfun-ai/step-3.5-flash",
     "qwen/qwen3-next-80b-a3b-instruct",
     "qwen/qwen3-coder-480b-a35b-instruct",
