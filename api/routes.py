@@ -18,6 +18,7 @@ from .request_utils import (
     extract_command_prefix,
     extract_filepaths_from_command,
     get_token_count,
+    fast_token_estimate as _fast_token_estimate,
 )
 from config.settings import Settings, get_active_model
 from providers.base import BaseProvider
@@ -114,7 +115,10 @@ async def create_message(
         log_request_compact(logger, request_id, request_data)
 
         if request_data.stream:
-            input_tokens = get_token_count(
+            # Fast approximate token count — avoids blocking the event loop
+            # with a full tiktoken encode before the stream starts.
+            # Uses ~4 chars/token heuristic (sufficient for SSE metadata).
+            input_tokens = _fast_token_estimate(
                 request_data.messages, request_data.system, request_data.tools
             )
             return StreamingResponse(

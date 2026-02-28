@@ -1,0 +1,152 @@
+/* Component: Table
+ * Data tables with styling
+ */
+
+/* Base table */
+.table-container {
+    background: var(--bg-elevated);
+    border-radius: var(--radius-lg);
+    overflow: auto;
+    max-height: 60vh;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    padding: var(--space-3) var(--space-4);
+    text-align: left;
+    border-bottom: 1px solid var(--border-default);
+}
+
+th {
+    background: var(--bg-surface);
+    position: sticky;
+    top: 0;
+    font-weight: var(--font-semibold);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+    font-size: var(--text-xs);
+}
+
+th[aria-sort] {
+    cursor: pointer;
+}
+
+th[aria-sort]:hover {
+    background: var(--bg-surface-hover);
+}
+
+td {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+
+tr {
+    transition: background var(--transition-base);
+}
+
+tbody tr:hover {
+    background: var(--bg-surface-hover);
+    cursor: pointer;
+}
+
+/* Table with row selection */
+.table-selectable tbody tr:hover {
+    background: var(--accent-primary-muted);
+}
+
+.table-selectable tbody tr.selected {
+    background: var(--accent-primary-muted);
+}
+
+/* Compact table */
+.table--compact th,
+.table--compact td {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-xs);
+}
+
+/* Legacy table styles */
+#logs-table tbody tr {
+    cursor: pointer;
+}
+
+#logs-table tbody tr:hover {
+    background: rgba(99, 102, 241, 0.1);
+}
+
+/* Table sorting indicators */
+th::before,
+th::after {
+    content: '';
+    display: inline-block;
+    width: 0;
+    height: 0;
+    vertical-align: middle;
+}
+
+th[aria-sort="ascending"]::after {
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 4px solid var(--text-primary);
+    margin-left: var(--space-1);
+}
+
+th[aria-sort="descending"]::before {
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 4px solid var(--text-primary);
+    margin-right: var(--space-1);
+}
+
+/* Table cell variations */
+.table-cell--mono {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+}
+
+.table-cell--action {
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* Pagination */
+.table-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-4);
+    border-top: 1px solid var(--border-default);
+    background: var(--bg-surface);
+}
+
+.table-pagination__info {
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+}
+
+.table-pagination__controls {
+    display: flex;
+    gap: var(--space-2);
+}
+
+/* Log time column */
+.log-time {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+}
+
+/* Error message cell */
+.error-message {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

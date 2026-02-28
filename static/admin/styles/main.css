@@ -1,0 +1,37 @@
+/* cc-nim Admin Dashboard - Main Stylesheet
+ * Phase 1: Design System Foundation
+ * Imports all design tokens and base styles
+ */
+
+/* Design Tokens */
+@import url('tokens/colors.css');
+@import url('tokens/typography.css');
+@import url('tokens/spacing.css');
+@import url('tokens/shadows.css');
+
+/* Base Styles */
+@import url('base/reset.css');
+@import url('base/global.css');
+
+/* Components will be added in Phase 2 */
+@import url('components/button.css');
+@import url('components/input.css');
+@import url('components/card.css');
+@import url('components/badge.css');
+@import url('components/table.css');
+@import url('components/modal.css');
+@import url('components/toast.css');
+
+/* Layouts will be added in Phase 3 */
+@import url('layouts/sidebar.css');
+@import url('layouts/header.css');
+@import url('layouts/dashboard.css');
+
+/* Utilities */
+@import url('utilities/utilities.css');
+
+/* 
+ * Legacy styles - to be migrated in future phases
+ * Temporary: keep existing functionality while transitioning
+ */
+@import url('legacy.css');

@@ -1,0 +1,147 @@
+/* Component: Card
+ * Content container with elevation
+ */
+
+/* Base card */
+.card {
+    background: var(--bg-elevated);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    box-shadow: var(--shadow-md);
+    transition: all var(--transition-base);
+}
+
+.card:hover {
+    box-shadow: var(--shadow-lg);
+}
+
+/* Card variants */
+.card--interactive {
+    cursor: pointer;
+}
+
+.card--interactive:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-xl);
+}
+
+.card--collapsible {
+    padding: 0;
+}
+
+.card__header {
+    padding: var(--space-4) var(--space-6);
+    border-bottom: 1px solid var(--border-default);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.card__header h3 {
+    margin-bottom: 0;
+    color: var(--accent-primary);
+}
+
+.card__body {
+    padding: var(--space-6);
+}
+
+.card__footer {
+    padding: var(--space-4) var(--space-6);
+    border-top: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+/* Legacy card styles */
+.card h3 {
+    margin-bottom: var(--space-4);
+    color: var(--accent-primary);
+    border-bottom: 1px solid var(--border-default);
+    padding-bottom: var(--space-2);
+}
+
+/* Dashboard grid */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: var(--space-6);
+}
+
+/* Error summary */
+.error-summary {
+    margin-bottom: var(--space-4);
+}
+
+.error-category-card {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+/* Model performance grid */
+.model-performance-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--space-4);
+}
+
+.model-performance-card {
+    background: var(--bg-surface);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+    border-left: 3px solid var(--accent-primary);
+    transition: all var(--transition-base);
+}
+
+.model-performance-card:hover {
+    background: var(--bg-surface-hover);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+}
+
+/* Health bars */
+.health-bar {
+    width: 100px;
+    height: 8px;
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+
+.health-fill {
+    height: 100%;
+    background: var(--status-success);
+    transition: width var(--transition-normal);
+}
+
+.health-fill.warning {
+    background: var(--status-warning);
+}
+
+.health-fill.danger {
+    background: var(--status-error);
+}
+
+/* Success rate bar */
+.success-rate-bar {
+    height: 6px;
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    margin-bottom: var(--space-2);
+}
+
+.success-rate-bar .fill {
+    height: 100%;
+    background: var(--status-success);
+    transition: width var(--transition-normal);
+}
+
+.success-rate-bar .fill.low {
+    background: var(--status-warning);
+}
+
+.success-rate-bar .fill.critical {
+    background: var(--status-error);
+}

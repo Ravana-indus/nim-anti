@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     http_max_connections: int = 100
     http_max_keepalive_connections: int = 20
 
+    # ==================== Retry Queue ====================
+    nvidia_nim_max_retries: int = 2
+    nvidia_nim_retry_backoff_base: float = 1.5
+    nvidia_nim_retry_queue_size: int = 50
+
+    # ==================== Admin Dashboard ====================
+    admin_log_buffer_size: int = 500
+
     # Handle empty strings for optional string fields
     @field_validator(
         "telegram_bot_token",

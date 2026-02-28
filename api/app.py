@@ -8,10 +8,17 @@ os.environ["PTB_TIMEDELTA"] = "1"
 import asyncio
 import logging
 import time
+import uuid as _uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
+
+try:
+    from fastapi.responses import ORJSONResponse
+except ImportError:
+    ORJSONResponse = JSONResponse  # type: ignore[misc]
 
 from .routes import router
 from .admin import router as admin_router
@@ -163,11 +170,15 @@ def create_app() -> FastAPI:
         title="Claude Code Proxy",
         version="2.0.0",
         lifespan=lifespan,
+        default_response_class=ORJSONResponse,
     )
 
     # Register routes
     app.include_router(router)
     app.include_router(admin_router)
+
+    # GZip compression for responses > 500 bytes
+    app.add_middleware(GZipMiddleware, minimum_size=500)
 
     # Mount admin static files
     app.mount("/admin/static", StaticFiles(directory="static/admin"), name="admin-static")
@@ -194,6 +205,15 @@ def create_app() -> FastAPI:
                 },
             )
 
+    # X-Request-ID middleware for end-to-end request tracing
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        """Add X-Request-ID to every response for tracing."""
+        request_id = request.headers.get("X-Request-ID") or f"req_{_uuid.uuid4().hex[:12]}"
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
     # Middleware for logging requests to admin dashboard
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
@@ -216,11 +236,20 @@ def create_app() -> FastAPI:
         """Prometheus-compatible metrics endpoint."""
         return Response(content=telemetry.as_prometheus(), media_type="text/plain")
 
+    # Track server start time for uptime reporting
+    _start_time = time.monotonic()
+
     # Health check endpoints for orchestration (Kubernetes, Docker, etc.)
     @app.get("/health")
     async def health():
-        """Basic health check - always returns healthy if server is running."""
-        return {"status": "healthy", "service": "claude-code-proxy"}
+        """Basic health check with version and uptime."""
+        uptime_seconds = round(time.monotonic() - _start_time, 1)
+        return {
+            "status": "healthy",
+            "service": "claude-code-proxy",
+            "version": "2.0.0",
+            "uptime_seconds": uptime_seconds,
+        }
 
     @app.get("/admin", include_in_schema=False)
     async def admin_redirect():
@@ -260,6 +289,8 @@ def create_app() -> FastAPI:
             content={
                 "status": "ready" if all_ready else "not_ready",
                 "checks": checks,
+                "version": "2.0.0",
+                "uptime_seconds": round(time.monotonic() - _start_time, 1),
             },
         )
 

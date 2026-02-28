@@ -14,4 +14,10 @@ if __name__ == "__main__":
     from config.settings import get_settings
 
     settings = get_settings()
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level="debug")
+    uvicorn.run(
+        app, 
+        host=settings.host, 
+        port=settings.port, 
+        log_level="debug",
+        loop="uvloop",  # Maximize asyncio performance
+    )

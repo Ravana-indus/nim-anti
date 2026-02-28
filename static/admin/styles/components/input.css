@@ -1,0 +1,162 @@
+/* Component: Input
+ * Form input styles with variants
+ */
+
+/* Base input */
+.input {
+    display: block;
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    color: var(--text-primary);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    transition: all var(--transition-base);
+}
+
+.input:hover {
+    border-color: var(--border-hover);
+}
+
+.input:focus {
+    border-color: var(--accent-primary);
+    box-shadow: var(--shadow-focus);
+    outline: none;
+}
+
+.input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: var(--bg-elevated);
+}
+
+/* Input variants */
+.input--error {
+    border-color: var(--status-error);
+}
+
+.input--error:focus {
+    box-shadow: var(--shadow-focus-error);
+}
+
+.input--success {
+    border-color: var(--status-success);
+}
+
+.input--success:focus {
+    box-shadow: var(--shadow-focus-success);
+}
+
+/* Input with icon */
+.input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.input-wrapper .input {
+    padding-left: var(--space-10);
+}
+
+.input-icon {
+    position: absolute;
+    left: var(--space-3);
+    color: var(--text-tertiary);
+    pointer-events: none;
+}
+
+/* Textarea */
+textarea.input {
+    min-height: 100px;
+    resize: vertical;
+}
+
+/* Select */
+select.input {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236E6E7A' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right var(--space-3) center;
+    padding-right: var(--space-10);
+}
+
+/* Checkbox */
+.checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+}
+
+.checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+}
+
+/* Form group */
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.form-group label {
+    font-size: var(--text-sm);
+    font-weight: var(--font-medium);
+    color: var(--text-secondary);
+}
+
+/* Filter bar inputs (legacy support) */
+.filter-bar input,
+.filter-bar select {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    transition: all var(--transition-base);
+}
+
+.filter-bar input:hover,
+.filter-bar select:hover {
+    border-color: var(--border-hover);
+}
+
+.filter-bar input:focus,
+.filter-bar select:focus {
+    border-color: var(--accent-primary);
+    box-shadow: var(--shadow-focus);
+    outline: none;
+}
+
+/* Model controls input (legacy support) */
+.model-controls input {
+    flex: 1;
+    min-width: 220px;
+    padding: var(--space-2);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    transition: all var(--transition-base);
+}
+
+.model-controls input:hover {
+    border-color: var(--border-hover);
+}
+
+.model-controls input:focus {
+    border-color: var(--accent-primary);
+    box-shadow: var(--shadow-focus);
+    outline: none;
+}

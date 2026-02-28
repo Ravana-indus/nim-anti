@@ -346,6 +346,18 @@ async def get_models(q: Optional[str] = None, limit: int = 200):
     }
 
 
+@router.post("/models/refresh")
+async def refresh_model_catalog():
+    """Force-refresh the model catalog cache from disk."""
+    global _model_catalog_cache
+    _model_catalog_cache = None
+    models = _load_model_catalog()
+    return {
+        "status": "refreshed",
+        "total": len(models),
+    }
+
+
 @router.post("/model")
 async def set_model(payload: ActiveModelUpdateRequest):
     """Set active runtime model for new requests."""

@@ -1,7 +1,19 @@
 """NVIDIA NIM provider implementation with multi-key and model fallback."""
 
 import asyncio
-import json
+import heapq
+try:
+    import orjson
+    def _fast_json_dumps(obj):
+        return orjson.dumps(obj).decode()
+    def _fast_json_loads(s):
+        return orjson.loads(s)
+except ImportError:
+    import json
+    def _fast_json_dumps(obj):
+        return json.dumps(obj)
+    def _fast_json_loads(s):
+        return json.loads(s)
 import logging
 import time
 import uuid
@@ -18,6 +30,8 @@ from providers.rate_limit import GlobalRateLimiter
 from providers.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from .errors import map_error
 from .key_manager import NimKeyManager
+
+logger = logging.getLogger(__name__)
 from .request import build_request_body
 from .response import convert_response
 from .utils import (
@@ -28,7 +42,7 @@ from .utils import (
     map_stop_reason,
 )
 
-logger = logging.getLogger(__name__)
+# (logger moved near top)
 
 # Lazy import for admin logging to avoid circular imports
 _admin_log_request: Optional[callable] = None
@@ -61,6 +75,43 @@ def _get_attempt_recorder():
     return _telemetry_attempt_recorder
 
 
+class PriorityRequestQueue:
+    """Queue that prioritizing high-priority requests when concurrency limits are hit."""
+    
+    def __init__(self, max_concurrent: int = 10):
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._priority_queue = []
+        self._condition = asyncio.Condition()
+        self._counter = 0  # Tie breaker
+    
+    async def acquire(self, priority: int = 0):
+        """Higher priority values are processed first."""
+        async with self._condition:
+            self._counter += 1
+            # heapq is a min-heap, so we negate priority
+            heapq.heappush(self._priority_queue, (-priority, self._counter, asyncio.current_task()))
+            while self._priority_queue[0][2] != asyncio.current_task() or self._semaphore.locked():
+                if self._priority_queue[0][2] == asyncio.current_task() and not self._semaphore.locked():
+                    break
+                await self._condition.wait()
+            
+            await self._semaphore.acquire()
+            heapq.heappop(self._priority_queue)
+            self._condition.notify_all()
+
+    def release(self):
+        self._semaphore.release()
+        async def _notify():
+            async with self._condition:
+                self._condition.notify_all()
+        # Create a task to notify waiting coroutines
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_notify())
+        except RuntimeError:
+            pass
+
+
 class NvidiaNimProvider(BaseProvider):
     """NVIDIA NIM provider with multi-key rotation fallback."""
 
@@ -79,7 +130,7 @@ class NvidiaNimProvider(BaseProvider):
             rate_window=config.rate_window,
         )
         self._max_in_flight = max(1, config.max_in_flight)
-        self._request_semaphore = asyncio.Semaphore(self._max_in_flight)
+        self._request_queue = PriorityRequestQueue(max_concurrent=self._max_in_flight)
         self._active_requests = 0
         self._active_requests_lock = asyncio.Lock()
         self._sticky_model_lock = Lock()
@@ -98,15 +149,15 @@ class NvidiaNimProvider(BaseProvider):
             cooldown_seconds=config.key_cooldown_sec or 60,
         )
 
-        # Circuit breaker for fault tolerance
-        self._circuit_breaker = CircuitBreaker(
-            name="nvidia_nim",
-            failure_threshold=getattr(config, 'circuit_breaker_threshold', 5),
-            recovery_timeout=getattr(config, 'circuit_breaker_recovery', 30.0),
-        )
+        # Per-model circuit breakers for fault tolerance.
+        # Each model gets its own CB so one bad model doesn't block fallbacks.
+        self._cb_failure_threshold = getattr(config, 'circuit_breaker_threshold', 5)
+        self._cb_recovery_timeout = getattr(config, 'circuit_breaker_recovery', 30.0)
+        self._model_circuit_breakers: dict[str, CircuitBreaker] = {}
 
-        # Shared HTTP client with connection pooling for better performance
+        # Shared HTTP client with connection pooling and HTTP/2 for better performance
         self._http_client = httpx.AsyncClient(
+            http2=True,  # Enable HTTP/2 multiplexing (requires h2 package)
             limits=httpx.Limits(
                 max_connections=getattr(config, 'max_connections', 100),
                 max_keepalive_connections=getattr(config, 'max_keepalive_connections', 20),
@@ -149,15 +200,17 @@ class NvidiaNimProvider(BaseProvider):
             self._client_cache[key] = await self._client_factory(key)
         return self._client_cache[key]
 
-    async def _acquire_request_slot(self) -> None:
-        await self._request_semaphore.acquire()
+    async def _acquire_request_slot(self, request: Any = None) -> None:
+        # Simple heuristic: prioritize short messages
+        priority = 10 if (request and hasattr(request, "messages") and len(request.messages) <= 2) else 0
+        await self._request_queue.acquire(priority)
         async with self._active_requests_lock:
             self._active_requests += 1
 
     async def _release_request_slot(self) -> None:
         async with self._active_requests_lock:
             self._active_requests = max(0, self._active_requests - 1)
-        self._request_semaphore.release()
+        self._request_queue.release()
 
     async def _record_attempt(
         self,
@@ -183,8 +236,18 @@ class NvidiaNimProvider(BaseProvider):
         """Internal helper for tests and shared building."""
         return build_request_body(request, self._nim_settings, stream=stream)
 
+    def _get_model_cb(self, model: str) -> CircuitBreaker:
+        """Get or create a circuit breaker for a specific model."""
+        if model not in self._model_circuit_breakers:
+            self._model_circuit_breakers[model] = CircuitBreaker(
+                name=f"model:{model}",
+                failure_threshold=self._cb_failure_threshold,
+                recovery_timeout=self._cb_recovery_timeout,
+            )
+        return self._model_circuit_breakers[model]
+
     def _candidate_models(self, request_model: str) -> list[str]:
-        """Ordered model fallback list for the current request."""
+        """Ordered model fallback list, skipping models with open circuit breakers."""
         try:
             chain = get_model_fallback_chain(request_model)
         except Exception:
@@ -192,8 +255,17 @@ class NvidiaNimProvider(BaseProvider):
         with self._sticky_model_lock:
             sticky_model = self._sticky_model
         if sticky_model and sticky_model in chain:
-            return [sticky_model] + [model for model in chain if model != sticky_model]
-        return chain
+            ordered = [sticky_model] + [m for m in chain if m != sticky_model]
+        else:
+            ordered = chain
+
+        # Filter out models whose circuit breaker is open
+        available = [m for m in ordered if not self._get_model_cb(m).is_open]
+        if not available:
+            # All open — return the full list and let the CB recovery logic handle it
+            logger.warning("All model circuit breakers are open — trying all models anyway")
+            return ordered
+        return available
 
     def _remember_working_model(self, model: str) -> None:
         with self._sticky_model_lock:
@@ -233,35 +305,30 @@ class NvidiaNimProvider(BaseProvider):
             self._sticky_model = None
 
     def get_circuit_breaker_status(self) -> dict:
-        """Get circuit breaker status for monitoring."""
-        return self._circuit_breaker.snapshot()
+        """Get per-model circuit breaker status for monitoring."""
+        return {
+            model: cb.snapshot()
+            for model, cb in self._model_circuit_breakers.items()
+        }
 
-    async def reset_circuit_breaker(self) -> None:
-        """Manually reset the circuit breaker."""
-        await self._circuit_breaker.reset()
+    async def reset_circuit_breaker(self, model: Optional[str] = None) -> None:
+        """Manually reset circuit breaker(s). If model is None, reset all."""
+        if model:
+            cb = self._model_circuit_breakers.get(model)
+            if cb:
+                await cb.reset()
+        else:
+            for cb in self._model_circuit_breakers.values():
+                await cb.reset()
 
     async def stream_response(
         self, request: Any, input_tokens: int = 0
     ) -> AsyncIterator[str]:
         """Stream response in Anthropic SSE format."""
-        # Check circuit breaker first
-        if self._circuit_breaker.is_open:
-            message_id = f"msg_{uuid.uuid4()}"
-            sse = SSEBuilder(message_id, request.model, input_tokens)
-            yield sse.message_start()
-            for event in sse.emit_error(
-                f"Service temporarily unavailable. Circuit breaker open. "
-                f"Retry in {self._circuit_breaker.recovery_timeout:.0f}s."
-            ):
-                yield event
-            for event in sse.close_all_blocks():
-                yield event
-            yield sse.message_delta("error", 0)
-            yield sse.message_stop()
-            yield sse.done()
-            return
+        # Per-model circuit breaker check is done inside _candidate_models()
+        # which filters out models with open breakers.
 
-        await self._acquire_request_slot()
+        await self._acquire_request_slot(request)
         try:
             waited_reactively = await self._global_rate_limiter.wait_if_blocked()
             message_id = f"msg_{uuid.uuid4()}"
@@ -360,7 +427,7 @@ class NvidiaNimProvider(BaseProvider):
                                             yield sse.content_block_delta(
                                                 block_idx,
                                                 "input_json_delta",
-                                                json.dumps(tool_use["input"]),
+                                                _fast_json_dumps(tool_use["input"]),
                                             )
                                             yield sse.content_block_stop(block_idx)
 
@@ -381,8 +448,8 @@ class NvidiaNimProvider(BaseProvider):
 
                         stream_succeeded = True
                         await self._key_manager.record_success(key)
-                        # Record success for circuit breaker
-                        await self._circuit_breaker._record_success()
+                        # Record success for per-model circuit breaker
+                        await self._get_model_cb(model)._record_success()
                         await self._record_attempt(
                             model=model,
                             key=key,
@@ -398,9 +465,9 @@ class NvidiaNimProvider(BaseProvider):
                         status_code = self._status_code(e)
                         if status_code == 429:
                             await self._key_manager.record_rate_limit(key)
-                        # Record failure for circuit breaker (only for server errors)
+                        # Record failure for per-model circuit breaker (only for server errors)
                         if status_code and status_code >= 500:
-                            await self._circuit_breaker._record_failure()
+                            await self._get_model_cb(model)._record_failure()
                         await self._record_attempt(
                             model=model,
                             key=key,
@@ -503,7 +570,7 @@ class NvidiaNimProvider(BaseProvider):
                 yield sse.content_block_delta(
                     block_idx,
                     "input_json_delta",
-                    json.dumps(tool_use["input"]),
+                    _fast_json_dumps(tool_use["input"]),
                 )
                 yield sse.content_block_stop(block_idx)
 
@@ -528,7 +595,7 @@ class NvidiaNimProvider(BaseProvider):
 
     async def complete(self, request: Any) -> dict:
         """Make a non-streaming completion request with multi-key rotation."""
-        await self._acquire_request_slot()
+        await self._acquire_request_slot(request)
         try:
             await self._global_rate_limiter.wait_if_blocked()
             base_body = self._build_request_body(request, stream=False)
@@ -720,14 +787,14 @@ class NvidiaNimProvider(BaseProvider):
 
             if sse.blocks.tool_names.get(tc_index, "") == "Task":
                 try:
-                    args_json = json.loads(args)
+                    args_json = _fast_json_loads(args)
                     if args_json.get("run_in_background") is not False:
                         logger.info(
                             "NIM_INTERCEPT: Forcing run_in_background=False for Task "
                             f"{tc.get('id', 'unknown')}"
                         )
                         args_json["run_in_background"] = False
-                        args = json.dumps(args_json)
+                        args = _fast_json_dumps(args_json)
                 except Exception as e:
                     logger.warning(
                         f"NIM_INTERCEPT: Failed to parse/modify Task args: {e}"

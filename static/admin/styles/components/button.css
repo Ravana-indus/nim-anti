@@ -1,0 +1,194 @@
+/* Component: Button
+ * Reusable button styles with variants
+ */
+
+/* Base button */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--text-sm);
+    font-weight: var(--font-medium);
+    line-height: var(--leading-normal);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-base);
+    border: 1px solid transparent;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* Button variants */
+.btn--primary {
+    background: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
+}
+
+.btn--primary:hover:not(:disabled) {
+    background: var(--accent-primary-hover);
+    border-color: var(--accent-primary-hover);
+    box-shadow: var(--shadow-glow-primary);
+}
+
+.btn--primary:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.btn--secondary {
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border-color: var(--border-default);
+}
+
+.btn--secondary:hover:not(:disabled) {
+    background: var(--bg-surface-hover);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+
+.btn--ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border-color: transparent;
+}
+
+.btn--ghost:hover:not(:disabled) {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+}
+
+.btn--danger {
+    background: var(--status-error);
+    color: white;
+    border-color: var(--status-error);
+}
+
+.btn--danger:hover:not(:disabled) {
+    background: #dc2626;
+    border-color: #dc2626;
+    box-shadow: var(--shadow-glow-error);
+}
+
+.btn--success {
+    background: var(--status-success);
+    color: white;
+    border-color: var(--status-success);
+}
+
+.btn--success:hover:not(:disabled) {
+    background: #059669;
+    border-color: #059669;
+    box-shadow: var(--shadow-glow-success);
+}
+
+/* Button sizes */
+.btn--sm {
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--text-xs);
+}
+
+.btn--md {
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--text-sm);
+}
+
+.btn--lg {
+    padding: var(--space-3) var(--space-6);
+    font-size: var(--text-base);
+}
+
+/* Button states */
+.btn--loading {
+    position: relative;
+    color: transparent;
+    pointer-events: none;
+}
+
+.btn--loading::after {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+.btn--loading.btn--primary::after {
+    border-color: white;
+    border-right-color: transparent;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Action button (legacy support) */
+.action-btn {
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: var(--text-sm);
+    transition: all var(--transition-base);
+}
+
+.action-btn:hover {
+    background: var(--bg-surface-hover);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+
+.action-btn.active {
+    background: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
+}
+
+.action-btn.block {
+    background: var(--status-error);
+    color: white;
+    border-color: var(--status-error);
+}
+
+.action-btn.unblock {
+    background: var(--status-success);
+    color: white;
+    border-color: var(--status-success);
+}
+
+/* Primary button (legacy support) */
+.primary-btn {
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    padding: var(--space-2) var(--space-6);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: var(--text-base);
+    font-weight: var(--font-medium);
+    transition: all var(--transition-base);
+}
+
+.primary-btn:hover {
+    background: var(--accent-primary-hover);
+    box-shadow: var(--shadow-glow-primary);
+}
+
+.primary-btn:active {
+    transform: scale(0.98);
+}

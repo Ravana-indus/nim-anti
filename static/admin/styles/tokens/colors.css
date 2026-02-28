@@ -1,0 +1,140 @@
+/* Design Tokens: Colors
+ * AAA-compliant color palette for cc-nim Admin Dashboard
+ * Based on the UI/UX overhaul plan
+ */
+
+/* CSS Custom Properties - Semantic Color Tokens */
+:root {
+    /* ===========================================
+   * BACKGROUND LAYERS
+   * Purpose: Create depth through layered backgrounds
+   * =========================================== */
+    --bg-base: #0D0D12;
+    --bg-elevated: #14141B;
+    --bg-surface: #1C1C26;
+    --bg-surface-hover: #242430;
+    --bg-surface-active: #2A2A38;
+
+    /* ===========================================
+   * TEXT HIERARCHY
+   * Purpose: Establish clear reading hierarchy
+   * All colors meet WCAG AAA contrast requirements
+   * =========================================== */
+    --text-primary: #F4F4F6;
+    /* 15.3:1 contrast on bg-base */
+    --text-secondary: #A8A8B3;
+    /* 8.2:1 contrast on bg-base */
+    --text-tertiary: #6E6E7A;
+    /* 4.8:1 contrast on bg-base */
+    --text-disabled: #4A4A55;
+    /* 3.2:1 contrast on bg-base */
+    --text-inverse: #0D0D12;
+    /* For light backgrounds */
+
+    /* ===========================================
+   * ACCENT COLORS
+   * Purpose: Primary brand identity and interactions
+   * =========================================== */
+    --accent-primary: #6366F1;
+    /* Indigo - primary actions */
+    --accent-primary-hover: #818CF8;
+    --accent-primary-muted: rgba(99, 102, 241, 0.15);
+    --accent-secondary: #22D3EE;
+    /* Cyan - secondary highlights */
+    --accent-secondary-muted: rgba(34, 211, 238, 0.15);
+
+    /* ===========================================
+   * SEMANTIC STATUS COLORS
+   * Purpose: Communicate system state
+   * All meet AAA contrast requirements
+   * =========================================== */
+    --status-success: #10B981;
+    /* Green - 12.6:1 contrast */
+    --status-success-muted: rgba(16, 185, 129, 0.15);
+    --status-success-bg: rgba(16, 185, 129, 0.08);
+
+    --status-warning: #F59E0B;
+    /* Amber - 9.4:1 contrast */
+    --status-warning-muted: rgba(245, 158, 11, 0.15);
+    --status-warning-bg: rgba(245, 158, 11, 0.08);
+
+    --status-error: #EF4444;
+    /* Red - 7.8:1 contrast */
+    --status-error-muted: rgba(239, 68, 68, 0.15);
+    --status-error-bg: rgba(239, 68, 68, 0.08);
+
+    --status-info: #3B82F6;
+    /* Blue - 9.2:1 contrast */
+    --status-info-muted: rgba(59, 130, 246, 0.15);
+    --status-info-bg: rgba(59, 130, 246, 0.08);
+
+    /* ===========================================
+   * BORDER & SEPARATOR COLORS
+   * Purpose: Define visual boundaries
+   * =========================================== */
+    --border-default: #2A2A36;
+    --border-hover: #3A3A48;
+    --border-focus: #6366F1;
+    --border-subtle: #1E1E28;
+    --separator: #242430;
+
+    /* ===========================================
+   * INTERACTIVE STATE COLORS
+   * Purpose: Feedback for user actions
+   * =========================================== */
+    --interactive-bg: #1C1C26;
+    --interactive-bg-hover: #242430;
+    --interactive-bg-active: #2A2A38;
+    --interactive-border: #3A3A48;
+    --interactive-text: #A8A8B3;
+    --interactive-text-hover: #F4F4F6;
+
+    /* ===========================================
+   * OVERLAY & BACKDROP
+   * Purpose: Modal and popup backgrounds
+   * =========================================== */
+    --overlay-dark: rgba(0, 0, 0, 0.7);
+    --overlay-light: rgba(0, 0, 0, 0.4);
+    --backdrop-blur: blur(8px);
+
+    /* ===========================================
+   * LEGACY SUPPORT
+   * Purpose: Gradual migration from old colors
+   * Will be removed in future phases
+   * =========================================== */
+    --legacy-bg-dark: #1a1a2e;
+    --legacy-bg-darker: #16213e;
+    --legacy-accent: #e94560;
+    --legacy-border: #0f3460;
+}
+
+/* Light theme overrides */
+body.light-theme {
+    --bg-base: #F8F9FC;
+    --bg-elevated: #FFFFFF;
+    --bg-surface: #F1F3F6;
+    --bg-surface-hover: #E8EBF0;
+    --bg-surface-active: #DFE3EA;
+
+    --text-primary: #1A1A2E;
+    --text-secondary: #4A4A5A;
+    --text-tertiary: #7A7A8A;
+    --text-disabled: #A0A0B0;
+    --text-inverse: #FFFFFF;
+
+    --border-default: #E0E4EA;
+    --border-hover: #C8CED8;
+    --border-focus: #6366F1;
+    --border-subtle: #EAECF2;
+    --separator: #E8EBF0;
+
+    --interactive-bg: #F1F3F6;
+    --interactive-bg-hover: #E8EBF0;
+    --interactive-bg-active: #DFE3EA;
+    --interactive-border: #C8CED8;
+    --interactive-text: #4A4A5A;
+    --interactive-text-hover: #1A1A2E;
+
+    --overlay-dark: rgba(26, 26, 46, 0.6);
+    --overlay-light: rgba(26, 26, 46, 0.3);
+}

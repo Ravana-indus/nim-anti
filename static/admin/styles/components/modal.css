@@ -1,0 +1,157 @@
+/* Component: Modal
+ * Dialog and popup styles
+ */
+
+/* Base modal */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--overlay-dark);
+    z-index: 2000;
+    justify-content: center;
+    align-items: center;
+    opacity: 0;
+    transition: opacity var(--transition-normal);
+}
+
+.modal.active {
+    display: flex;
+    opacity: 1;
+}
+
+.modal-content {
+    background: var(--bg-elevated);
+    border-radius: var(--radius-xl);
+    width: 90%;
+    max-width: 800px;
+    max-height: 80vh;
+    overflow: auto;
+    box-shadow: var(--shadow-2xl);
+    transform: scale(0.95);
+    transition: transform var(--transition-normal);
+}
+
+.modal.active .modal-content {
+    transform: scale(1);
+}
+
+/* Modal header */
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-4) var(--space-6);
+    border-bottom: 1px solid var(--border-default);
+}
+
+.modal-header h3 {
+    margin: 0;
+    color: var(--accent-primary);
+    font-size: var(--text-xl);
+}
+
+/* Modal close button */
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: var(--text-2xl);
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+    transition: color var(--transition-base);
+}
+
+.modal-close:hover {
+    color: var(--accent-primary);
+}
+
+/* Modal body */
+.modal-body {
+    padding: var(--space-6);
+}
+
+/* Modal footer */
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-6);
+    border-top: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+}
+
+/* Modal sizes */
+.modal--sm .modal-content {
+    max-width: 400px;
+}
+
+.modal--lg .modal-content {
+    max-width: 1000px;
+}
+
+.modal--xl .modal-content {
+    max-width: 1200px;
+}
+
+/* Inspector sections (legacy support) */
+.inspector-section {
+    margin-bottom: var(--space-6);
+}
+
+.inspector-section h4 {
+    color: var(--accent-primary);
+    margin-bottom: var(--space-2);
+    font-size: var(--text-sm);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+}
+
+.inspector-section pre {
+    background: var(--bg-surface);
+    padding: var(--space-4);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    color: var(--text-tertiary);
+}
+
+/* Settings modal (legacy support) */
+.settings-notice {
+    background: var(--status-warning-muted);
+    border-left: 3px solid var(--status-warning);
+    padding: var(--space-4);
+    margin-bottom: var(--space-6);
+    border-radius: var(--radius-md);
+    color: var(--status-warning);
+    font-size: var(--text-sm);
+}
+
+.settings-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+/* Focus trap indicator (accessibility) */
+.modal:focus-within {
+    outline: none;
+}
+
+/* Backdrop click to close */
+.modal-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+}

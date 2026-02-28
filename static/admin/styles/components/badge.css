@@ -1,0 +1,189 @@
+/* Component: Badge
+ * Status indicators and labels
+ */
+
+/* Base badge */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+    font-weight: var(--font-medium);
+    line-height: var(--leading-tight);
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+}
+
+/* Badge variants */
+.badge--default {
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
+}
+
+.badge--primary {
+    background: var(--accent-primary-muted);
+    color: var(--accent-primary);
+}
+
+.badge--success {
+    background: var(--status-success-muted);
+    color: var(--status-success);
+}
+
+.badge--warning {
+    background: var(--status-warning-muted);
+    color: var(--status-warning);
+}
+
+.badge--error {
+    background: var(--status-error-muted);
+    color: var(--status-error);
+}
+
+.badge--info {
+    background: var(--status-info-muted);
+    color: var(--status-info);
+}
+
+/* Badge sizes */
+.badge--sm {
+    padding: 2px var(--space-1);
+    font-size: 10px;
+}
+
+.badge--lg {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+}
+
+/* Stat badge (legacy support) */
+.stat-badge {
+    background: var(--bg-surface);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    margin-left: var(--space-2);
+    font-size: var(--text-sm);
+    font-weight: var(--font-medium);
+    color: var(--text-secondary);
+}
+
+/* Error category badges (legacy support) */
+.error-category-badge {
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+    transition: all var(--transition-base);
+}
+
+.error-category-badge:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+
+.error-category-badge.rate_limit {
+    background: var(--status-warning-muted);
+    color: #000;
+}
+
+.error-category-badge.authentication {
+    background: var(--status-error-muted);
+    color: #fff;
+}
+
+.error-category-badge.quota {
+    background: #ff5722;
+    color: #fff;
+}
+
+.error-category-badge.timeout {
+    background: #9c27b0;
+    color: #fff;
+}
+
+.error-category-badge.network {
+    background: var(--status-info-muted);
+    color: #fff;
+}
+
+.error-category-badge.model_not_found {
+    background: #00bcd4;
+    color: #000;
+}
+
+.error-category-badge.bad_request {
+    background: #795548;
+    color: #fff;
+}
+
+.error-category-badge.unknown {
+    background: #607d8b;
+    color: #fff;
+}
+
+/* Status indicators */
+.status-active {
+    color: var(--status-success);
+}
+
+.status-blocked {
+    color: var(--status-error);
+}
+
+.status-success {
+    color: var(--status-success);
+}
+
+.status-error {
+    color: var(--status-error);
+}
+
+.status-fallback {
+    color: var(--status-warning);
+}
+
+/* Key badge (legacy support) */
+.key-badge {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+
+/* Model item */
+.model-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-3);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-2);
+    transition: all var(--transition-base);
+}
+
+.model-item:hover {
+    background: var(--bg-surface-hover);
+}
+
+.model-item.primary {
+    border-left: 3px solid var(--accent-primary);
+}
+
+.model-item.fallback {
+    border-left: 3px solid var(--bg-surface-hover);
+}
+
+.model-name {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+
+.model-pos {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+}

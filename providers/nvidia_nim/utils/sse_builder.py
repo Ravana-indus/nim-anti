@@ -36,6 +36,11 @@ STOP_REASON_MAP = {
 _SSE_TEMPLATE_MESSAGE_STOP = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
 _SSE_TEMPLATE_DONE = "[DONE]\n\n"
 
+# message_start template with placeholders
+_SSE_TEMPLATE_MESSAGE_START = """event: message_start
+data: {{"type":"message_start","message":{{"id":"{message_id}","type":"message","role":"assistant","content":[],"model":"{model}","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":{input_tokens},"output_tokens":1}}}}}}
+
+"""
 
 def map_stop_reason(openai_reason: Optional[str]) -> str:
     """Map OpenAI finish_reason to Anthropic stop_reason."""
@@ -84,22 +89,11 @@ class SSEBuilder:
 
     # Message lifecycle events
     def message_start(self) -> str:
-        """Generate message_start event."""
-        return self._format_event(
-            "message_start",
-            {
-                "type": "message_start",
-                "message": {
-                    "id": self.message_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [],
-                    "model": self.model,
-                    "stop_reason": None,
-                    "stop_sequence": None,
-                    "usage": {"input_tokens": self.input_tokens, "output_tokens": 1},
-                },
-            },
+        """Generate message_start event using cached template."""
+        return _SSE_TEMPLATE_MESSAGE_START.format(
+            message_id=self.message_id,
+            model=self.model,
+            input_tokens=self.input_tokens,
         )
 
     def message_delta(self, stop_reason: str, output_tokens: int) -> str:

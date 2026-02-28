@@ -1,0 +1,258 @@
+/* Design Tokens: Shadows & Elevation
+ * Elevation system for cc-nim Admin Dashboard
+ * Creates depth and hierarchy through shadow layers
+ */
+
+/* Shadow System - Layered for depth */
+:root {
+    /* Base shadows - subtle depth */
+    --shadow-none: none;
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.25);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.35), 0 2px 4px rgba(0, 0, 0, 0.25);
+    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4), 0 4px 6px rgba(0, 0, 0, 0.25);
+    --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.45), 0 10px 10px rgba(0, 0, 0, 0.2);
+    --shadow-2xl: 0 25px 50px rgba(0, 0, 0, 0.5), 0 15px 20px rgba(0, 0, 0, 0.25);
+
+    /* Functional shadows - specific purposes */
+    --shadow-focus: 0 0 0 3px rgba(99, 102, 241, 0.4);
+    --shadow-focus-error: 0 0 0 3px rgba(239, 68, 68, 0.4);
+    --shadow-focus-success: 0 0 0 3px rgba(16, 185, 129, 0.4);
+
+    /* Glow effects - accent colors */
+    --shadow-glow-primary: 0 0 20px rgba(99, 102, 241, 0.25);
+    --shadow-glow-primary-lg: 0 0 40px rgba(99, 102, 241, 0.35);
+    --shadow-glow-secondary: 0 0 20px rgba(34, 211, 238, 0.25);
+    --shadow-glow-success: 0 0 20px rgba(16, 185, 129, 0.25);
+    --shadow-glow-warning: 0 0 20px rgba(245, 158, 11, 0.25);
+    --shadow-glow-error: 0 0 20px rgba(239, 68, 68, 0.25);
+
+    /* Inner shadows - inset depth */
+    --shadow-inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-inset-md: inset 0 2px 4px rgba(0, 0, 0, 0.25);
+    --shadow-inset-lg: inset 0 4px 8px rgba(0, 0, 0, 0.3);
+
+    /* Card elevation - common patterns */
+    --elevation-1: var(--shadow-sm);
+    --elevation-2: var(--shadow-md);
+    --elevation-3: var(--shadow-lg);
+    --elevation-4: var(--shadow-xl);
+
+    /* Border radius system */
+    --radius-none: 0;
+    --radius-sm: 4px;
+    /* Badges, tags */
+    --radius-md: 8px;
+    /* Buttons, inputs */
+    --radius-lg: 12px;
+    /* Cards */
+    --radius-xl: 16px;
+    /* Modals */
+    --radius-2xl: 20px;
+    /* Large cards */
+    --radius-full: 9999px;
+    /* Pills, avatars */
+
+    /* Transitions - timing */
+    --transition-fast: 100ms ease;
+    --transition-base: 150ms ease;
+    --transition-normal: 250ms ease;
+    --transition-slow: 400ms ease;
+
+    /* Timing functions */
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Shadow utility classes */
+.shadow-none {
+    box-shadow: var(--shadow-none);
+}
+
+.shadow-xs {
+    box-shadow: var(--shadow-xs);
+}
+
+.shadow-sm {
+    box-shadow: var(--shadow-sm);
+}
+
+.shadow-md {
+    box-shadow: var(--shadow-md);
+}
+
+.shadow-lg {
+    box-shadow: var(--shadow-lg);
+}
+
+.shadow-xl {
+    box-shadow: var(--shadow-xl);
+}
+
+.shadow-2xl {
+    box-shadow: var(--shadow-2xl);
+}
+
+.shadow-focus {
+    box-shadow: var(--shadow-focus);
+}
+
+.shadow-focus-error {
+    box-shadow: var(--shadow-focus-error);
+}
+
+.shadow-focus-success {
+    box-shadow: var(--shadow-focus-success);
+}
+
+.shadow-glow {
+    box-shadow: var(--shadow-glow-primary);
+}
+
+.shadow-glow-primary {
+    box-shadow: var(--shadow-glow-primary);
+}
+
+.shadow-glow-secondary {
+    box-shadow: var(--shadow-glow-secondary);
+}
+
+.shadow-glow-success {
+    box-shadow: var(--shadow-glow-success);
+}
+
+.shadow-glow-warning {
+    box-shadow: var(--shadow-glow-warning);
+}
+
+.shadow-glow-error {
+    box-shadow: var(--shadow-glow-error);
+}
+
+/* Border radius utility classes */
+.rounded-none {
+    border-radius: var(--radius-none);
+}
+
+.rounded-sm {
+    border-radius: var(--radius-sm);
+}
+
+.rounded-md {
+    border-radius: var(--radius-md);
+}
+
+.rounded-lg {
+    border-radius: var(--radius-lg);
+}
+
+.rounded-xl {
+    border-radius: var(--radius-xl);
+}
+
+.rounded-2xl {
+    border-radius: var(--radius-2xl);
+}
+
+.rounded-full {
+    border-radius: var(--radius-full);
+}
+
+/* Transition utility classes */
+.transition-none {
+    transition: none;
+}
+
+.transition-fast {
+    transition: all var(--transition-fast);
+}
+
+.transition-base {
+    transition: all var(--transition-base);
+}
+
+.transition-normal {
+    transition: all var(--transition-normal);
+}
+
+.transition-slow {
+    transition: all var(--transition-slow);
+}
+
+/* Specific transition properties */
+.transition-colors {
+    transition: color var(--transition-base), background-color var(--transition-base), border-color var(--transition-base);
+}
+
+.transition-transform {
+    transition: transform var(--transition-base);
+}
+
+.transition-shadow {
+    transition: box-shadow var(--transition-base);
+}
+
+.transition-opacity {
+    transition: opacity var(--transition-base);
+}
+
+.transition-all {
+    transition: all var(--transition-base);
+}
+
+/* Transform utilities */
+.transform {
+    transform: translateX(0);
+}
+
+.hover-lift:hover {
+    transform: translateY(-2px);
+}
+
+.hover-scale:hover {
+    transform: scale(1.02);
+}
+
+.active-press:active {
+    transform: scale(0.98);
+}
+
+/* Skeleton loading animation */
+@keyframes skeleton-shimmer {
+    0% {
+        background-position: 200% 0;
+    }
+
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+.skeleton {
+    background: linear-gradient(90deg,
+            var(--bg-surface) 25%,
+            var(--bg-surface-hover) 50%,
+            var(--bg-surface) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.5s infinite;
+    border-radius: var(--radius-sm);
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    .skeleton {
+        animation: none;
+        background: var(--bg-surface);
+    }
+}

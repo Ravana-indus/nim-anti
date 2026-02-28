@@ -19,6 +19,8 @@ dependencies = [
     "openai>=2.16.0",
     "aiofiles>=24.1.0",
     "orjson>=3.9.0",
+    "h2>=4.0.0",
+    "uvloop>=0.21.0",
 ]
 
 [dependency-groups]
