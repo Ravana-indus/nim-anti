@@ -104,7 +104,7 @@ class TestSSEBuilderMessageLifecycle:
 
     def test_done(self):
         builder = SSEBuilder("msg_1", "model")
-        assert builder.done() == "[DONE]\n\n"
+        assert builder.done() == ""
 
 
 class TestSSEBuilderContentBlocks:

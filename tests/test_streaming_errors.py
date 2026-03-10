@@ -111,12 +111,12 @@ class TestStreamingExceptionHandling:
             ):
                 events = await _collect_stream(provider, request)
 
-        # Should have message_start, error text block, close blocks, message_delta, message_stop, done
+        # Should have message_start, error text block, close blocks, message_delta, message_stop
         event_text = "".join(events)
         assert "message_start" in event_text
         assert "API failed" in event_text
         assert "message_stop" in event_text
-        assert "[DONE]" in event_text
+        assert "[DONE]" not in event_text
 
     @pytest.mark.asyncio
     async def test_error_after_partial_content(self):
@@ -324,9 +324,10 @@ class TestProcessToolCall:
             "id": "call_task2",
             "function": {"name": "Task", "arguments": "not json"},
         }
-        # Should not raise
-        events = list(provider._process_tool_call(tc, sse))
-        assert len(events) > 0
+        assert list(provider._process_tool_call(tc, sse)) == []
+        flushed = "".join(provider._flush_pending_tool_calls(sse))
+        assert '"name":"Task"' in flushed
+        assert "not json" in flushed
 
     def test_negative_tool_index_fallback(self):
         """tc_index < 0 uses len(tool_indices) as fallback."""
@@ -357,3 +358,54 @@ class TestProcessToolCall:
         events = list(provider._process_tool_call(tc, sse))
         event_text = "".join(events)
         assert "input_json_delta" in event_text
+
+    def test_tool_name_split_is_buffered_until_arguments_arrive(self):
+        """Split tool names should not emit partial tool_use names."""
+        provider = _make_provider()
+        from providers.nvidia_nim.utils import SSEBuilder
+
+        sse = SSEBuilder("msg_test", "test-model")
+
+        first = {
+            "index": 0,
+            "id": "call_edit",
+            "function": {"name": "Ed", "arguments": ""},
+        }
+        second = {
+            "index": 0,
+            "id": "call_edit",
+            "function": {"name": "it", "arguments": '{"file_path":"a.txt"}'},
+        }
+
+        first_events = list(provider._process_tool_call(first, sse))
+        second_events = list(provider._process_tool_call(second, sse))
+
+        assert first_events == []
+        event_text = "".join(second_events)
+        assert '"name":"Edit"' in event_text
+        assert '"name":"Ed"' not in event_text
+
+    def test_tool_arguments_before_name_flush_when_name_arrives_late(self):
+        """Buffered arguments should flush once the tool name is finally known."""
+        provider = _make_provider()
+        from providers.nvidia_nim.utils import SSEBuilder
+
+        sse = SSEBuilder("msg_test", "test-model")
+
+        args_first = {
+            "index": 0,
+            "id": "call_write",
+            "function": {"name": None, "arguments": '{"file_path":"a.txt"}'},
+        }
+        name_late = {
+            "index": 0,
+            "id": "call_write",
+            "function": {"name": "Write", "arguments": ""},
+        }
+
+        assert list(provider._process_tool_call(args_first, sse)) == []
+        assert list(provider._process_tool_call(name_late, sse)) == []
+
+        flushed = "".join(provider._flush_pending_tool_calls(sse))
+        assert '"name":"Write"' in flushed
+        assert '\\"file_path\\":\\"a.txt\\"' in flushed

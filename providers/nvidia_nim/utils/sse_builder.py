@@ -34,7 +34,7 @@ STOP_REASON_MAP = {
 
 # Pre-built SSE templates for static events (avoid repeated string formatting)
 _SSE_TEMPLATE_MESSAGE_STOP = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
-_SSE_TEMPLATE_DONE = "[DONE]\n\n"
+_SSE_TEMPLATE_DONE = ""
 
 # message_start template with placeholders
 _SSE_TEMPLATE_MESSAGE_START = """event: message_start
@@ -61,6 +61,7 @@ class ContentBlockManager:
     tool_indices: Dict[int, int] = field(default_factory=dict)
     tool_contents: Dict[int, str] = field(default_factory=dict)
     tool_names: Dict[int, str] = field(default_factory=dict)
+    tool_ids: Dict[int, str] = field(default_factory=dict)
     tool_started: Dict[int, bool] = field(default_factory=dict)
 
     def allocate_index(self) -> int:
@@ -207,7 +208,10 @@ class SSEBuilder:
         """Start a tool_use block."""
         block_idx = self.blocks.allocate_index()
         self.blocks.tool_indices[tool_index] = block_idx
-        self.blocks.tool_contents[tool_index] = ""
+        self.blocks.tool_contents.setdefault(tool_index, "")
+        self.blocks.tool_ids[tool_index] = tool_id
+        self.blocks.tool_names[tool_index] = name
+        self.blocks.tool_started[tool_index] = True
         return self.content_block_start(block_idx, "tool_use", id=tool_id, name=name)
 
     def emit_tool_delta(self, tool_index: int, partial_json: str) -> str:

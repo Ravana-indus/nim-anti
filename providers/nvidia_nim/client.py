@@ -574,6 +574,9 @@ class NvidiaNimProvider(BaseProvider):
                 )
                 yield sse.content_block_stop(block_idx)
 
+            for event in self._flush_pending_tool_calls(sse):
+                yield event
+
             if not error_occurred and sse.blocks.text_index == -1 and not sse.blocks.tool_indices:
                 for event in sse.ensure_text_block():
                     yield event
@@ -589,7 +592,9 @@ class NvidiaNimProvider(BaseProvider):
             )
             yield sse.message_delta(map_stop_reason(finish_reason), output_tokens)
             yield sse.message_stop()
-            yield sse.done()
+            done_marker = sse.done()
+            if done_marker:
+                yield done_marker
         finally:
             await self._release_request_slot()
 
@@ -754,50 +759,106 @@ class NvidiaNimProvider(BaseProvider):
         """Process a single tool call delta and yield SSE events."""
         tc_index = tc.get("index", 0)
         if tc_index < 0:
-            tc_index = len(sse.blocks.tool_indices)
+            known_indices = (
+                set(sse.blocks.tool_indices)
+                | set(sse.blocks.tool_names)
+                | set(sse.blocks.tool_contents)
+                | set(sse.blocks.tool_ids)
+            )
+            tc_index = max(known_indices, default=-1) + 1
 
         fn_delta = tc.get("function", {})
         if fn_delta.get("name") is not None:
             sse.blocks.tool_names[tc_index] = (
                 sse.blocks.tool_names.get(tc_index, "") + fn_delta["name"]
             )
-
-        if tc_index not in sse.blocks.tool_indices:
-            name = sse.blocks.tool_names.get(tc_index, "")
-            if name or tc.get("id"):
-                tool_id = tc.get("id") or f"tool_{uuid.uuid4()}"
-                yield sse.start_tool_block(tc_index, tool_id, name)
-                sse.blocks.tool_started[tc_index] = True
-        elif not sse.blocks.tool_started.get(tc_index) and sse.blocks.tool_names.get(
-            tc_index
-        ):
-            tool_id = tc.get("id") or f"tool_{uuid.uuid4()}"
-            name = sse.blocks.tool_names[tc_index]
-            yield sse.start_tool_block(tc_index, tool_id, name)
-            sse.blocks.tool_started[tc_index] = True
+        if tc.get("id"):
+            sse.blocks.tool_ids[tc_index] = tc["id"]
 
         args = fn_delta.get("arguments", "")
+        if sse.blocks.tool_started.get(tc_index):
+            if args:
+                yield sse.emit_tool_delta(tc_index, args)
+            return
+
         if args:
-            if not sse.blocks.tool_started.get(tc_index):
-                tool_id = tc.get("id") or f"tool_{uuid.uuid4()}"
-                name = sse.blocks.tool_names.get(tc_index, "tool_call") or "tool_call"
+            sse.blocks.tool_contents[tc_index] = (
+                sse.blocks.tool_contents.get(tc_index, "") + args
+            )
 
-                yield sse.start_tool_block(tc_index, tool_id, name)
-                sse.blocks.tool_started[tc_index] = True
+        name = sse.blocks.tool_names.get(tc_index, "")
+        if not name:
+            return
 
-            if sse.blocks.tool_names.get(tc_index, "") == "Task":
+        if name == "Task":
+            pending_args = sse.blocks.tool_contents.get(tc_index, "")
+            if not pending_args:
+                return
+            try:
+                args_json = _fast_json_loads(pending_args)
+                if args_json.get("run_in_background") is not False:
+                    logger.info(
+                        "NIM_INTERCEPT: Forcing run_in_background=False for Task "
+                        f"{tc.get('id', 'unknown')}"
+                    )
+                    args_json["run_in_background"] = False
+                    pending_args = _fast_json_dumps(args_json)
+                    sse.blocks.tool_contents[tc_index] = pending_args
+            except Exception:
+                return
+
+            tool_id = sse.blocks.tool_ids.get(tc_index) or f"tool_{uuid.uuid4()}"
+            yield sse.start_tool_block(tc_index, tool_id, name)
+            block_idx = sse.blocks.tool_indices[tc_index]
+            yield sse.content_block_delta(block_idx, "input_json_delta", pending_args)
+            return
+
+        if not args:
+            return
+
+        tool_id = sse.blocks.tool_ids.get(tc_index) or f"tool_{uuid.uuid4()}"
+        buffered_args = sse.blocks.tool_contents.get(tc_index, "")
+        yield sse.start_tool_block(tc_index, tool_id, name)
+        block_idx = sse.blocks.tool_indices[tc_index]
+        yield sse.content_block_delta(block_idx, "input_json_delta", buffered_args)
+
+    def _flush_pending_tool_calls(self, sse: Any):
+        """Flush buffered tool calls that never became startable mid-stream."""
+        pending_indices = sorted(
+            set(sse.blocks.tool_names)
+            | set(sse.blocks.tool_contents)
+            | set(sse.blocks.tool_ids)
+        )
+        for tc_index in pending_indices:
+            if sse.blocks.tool_started.get(tc_index):
+                continue
+
+            name = sse.blocks.tool_names.get(tc_index, "")
+            if not name:
+                continue
+
+            args = sse.blocks.tool_contents.get(tc_index, "")
+            if name == "Task" and args:
                 try:
                     args_json = _fast_json_loads(args)
                     if args_json.get("run_in_background") is not False:
                         logger.info(
                             "NIM_INTERCEPT: Forcing run_in_background=False for Task "
-                            f"{tc.get('id', 'unknown')}"
+                            f"{sse.blocks.tool_ids.get(tc_index, 'unknown')}"
                         )
                         args_json["run_in_background"] = False
                         args = _fast_json_dumps(args_json)
+                        sse.blocks.tool_contents[tc_index] = args
                 except Exception as e:
                     logger.warning(
                         f"NIM_INTERCEPT: Failed to parse/modify Task args: {e}"
                     )
 
-            yield sse.emit_tool_delta(tc_index, args)
+            if not args:
+                args = "{}"
+                sse.blocks.tool_contents[tc_index] = args
+
+            tool_id = sse.blocks.tool_ids.get(tc_index) or f"tool_{uuid.uuid4()}"
+            yield sse.start_tool_block(tc_index, tool_id, name)
+            block_idx = sse.blocks.tool_indices[tc_index]
+            yield sse.content_block_delta(block_idx, "input_json_delta", args)
