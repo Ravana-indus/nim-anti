@@ -13,6 +13,7 @@ from providers.exceptions import (
     RateLimitError,
     OverloadedError,
     APIError,
+    RequestTimeoutError,
 )
 
 
@@ -86,6 +87,13 @@ class TestMapError:
         )
         result = map_error(exc)
         assert isinstance(result, APIError)
+
+    def test_api_timeout_error(self):
+        """openai.APITimeoutError -> RequestTimeoutError with timeout status."""
+        exc = openai.APITimeoutError(request=Request("POST", "http://test"))
+        result = map_error(exc)
+        assert isinstance(result, RequestTimeoutError)
+        assert result.status_code == 504
 
     def test_unmapped_exception_passthrough(self):
         """Non-openai exceptions are returned as-is."""

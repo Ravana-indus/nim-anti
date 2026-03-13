@@ -78,6 +78,18 @@ class OverloadedError(ProviderError):
         )
 
 
+class RequestTimeoutError(ProviderError):
+    """Raised when the upstream provider times out."""
+
+    def __init__(self, message: str, raw_error: Any = None):
+        super().__init__(
+            message,
+            status_code=504,
+            error_type="timeout_error",
+            raw_error=raw_error,
+        )
+
+
 class APIError(ProviderError):
     """Raised when the provider returns a generic API error."""
 

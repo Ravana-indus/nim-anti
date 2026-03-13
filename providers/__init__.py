@@ -8,6 +8,7 @@ from .exceptions import (
     InvalidRequestError,
     RateLimitError,
     OverloadedError,
+    RequestTimeoutError,
     APIError,
 )
 
@@ -20,5 +21,6 @@ __all__ = [
     "InvalidRequestError",
     "RateLimitError",
     "OverloadedError",
+    "RequestTimeoutError",
     "APIError",
 ]

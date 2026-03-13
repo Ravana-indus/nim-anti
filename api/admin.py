@@ -150,6 +150,24 @@ def log_request(
         broadcast_coro.close()
 
 
+def _summarize_model_error(error: Optional[str]) -> str:
+    """Normalize noisy provider errors into short admin-friendly summaries."""
+    message = (error or "").strip()
+    if not message:
+        return ""
+
+    lowered = message.lower()
+    if lowered == "request timed out.":
+        return "Timed out while waiting for upstream model"
+    if lowered.startswith("timed out after "):
+        return message
+    if "timeout" in lowered or "timed out" in lowered:
+        return "Timed out while waiting for upstream model"
+    if "connection error" in lowered:
+        return "Upstream connection error"
+    return message
+
+
 async def _provider_snapshot(provider: object) -> dict:
     """Collect provider snapshot using public methods when available."""
     if provider is None:
@@ -665,7 +683,7 @@ async def get_model_performance():
             stats["success_count"] += 1
         if status in ("error", "failed") and log.get("error"):
             if len(stats["errors"]) < 5:  # Keep top 5 errors
-                stats["errors"].append(log.get("error", "")[:200])
+                stats["errors"].append(_summarize_model_error(log.get("error"))[:200])
     
     result = []
     for model, stats in model_stats.items():

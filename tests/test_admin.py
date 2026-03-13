@@ -244,3 +244,23 @@ def test_model_performance_avg_latency_uses_success_only():
     assert model["model"] == "m1"
     assert model["avg_latency_ms"] == 1000.0
     assert model["avg_attempt_latency_ms"] == round((1000.0 + 100000.0 + 2000.0) / 3, 2)
+
+
+def test_model_performance_summarizes_raw_timeout_error():
+    client = TestClient(app)
+    request_logs.clear()
+    request_logs.appendleft(
+        {
+            "timestamp": "2026-02-15T00:00:00Z",
+            "model": "m1",
+            "key_suffix": "1111",
+            "status": "failed",
+            "response_time_ms": 120000.0,
+            "error": "Request timed out.",
+        }
+    )
+
+    response = client.get("/admin/models/performance")
+    assert response.status_code == 200
+    model = response.json()["models"][0]
+    assert model["recent_errors"][0] == "Timed out while waiting for upstream model"

@@ -1,8 +1,12 @@
 import pytest
 import json
 from unittest.mock import MagicMock, AsyncMock, patch
+import httpx
+import openai
 from providers.nvidia_nim import NvidiaNimProvider
 from providers.exceptions import APIError
+from providers.model_utils import resolve_model_alias
+from config.settings import DEFAULT_NIM_MODEL_FALLBACK_ORDER
 
 
 # Mock data classes
@@ -34,6 +38,11 @@ class MockRequest:
         self.thinking.enabled = True
         for k, v in kwargs.items():
             setattr(self, k, v)
+
+
+def _make_timeout_error() -> openai.APITimeoutError:
+    request = httpx.Request("POST", "https://test.api.nvidia.com/v1/chat/completions")
+    return openai.APITimeoutError(request=request)
 
 
 @pytest.fixture(autouse=True)
@@ -280,6 +289,93 @@ def test_candidate_models_prefers_sticky_working_model(nim_provider):
             "model-a",
             "model-c",
         ]
+
+
+def test_model_alias_normalizes_leading_slash_for_requested_models():
+    assert (
+        resolve_model_alias("/nvidia/nemotron-3-super-120b-a12b")
+        == "nvidia/nemotron-3-super-120b-a12b"
+    )
+    assert (
+        resolve_model_alias("/qwen/qwen3.5-122b-a10b")
+        == "qwen/qwen3.5-122b-a10b"
+    )
+
+
+def test_default_fallback_order_includes_requested_models():
+    assert "nvidia/nemotron-3-super-120b-a12b" in DEFAULT_NIM_MODEL_FALLBACK_ORDER
+    assert "qwen/qwen3.5-122b-a10b" in DEFAULT_NIM_MODEL_FALLBACK_ORDER
+
+
+@pytest.mark.asyncio
+async def test_complete_timeout_opens_model_circuit_breaker_and_uses_fallback(
+    provider_config,
+):
+    req = MockRequest()
+    timeout_provider = NvidiaNimProvider(
+        provider_config.model_copy(update={"circuit_breaker_threshold": 1})
+    )
+
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {"id": "ok", "choices": []}
+
+    with (
+        patch.object(
+            timeout_provider._client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            side_effect=[_make_timeout_error(), mock_response],
+        ) as mock_create,
+        patch.object(
+            timeout_provider, "_candidate_models", return_value=["model-a", "model-b"]
+        ),
+    ):
+        result = await timeout_provider.complete(req)
+
+    assert result["id"] == "ok"
+    assert mock_create.await_count == 2
+    assert timeout_provider._get_model_cb("model-a").is_open
+    assert timeout_provider._sticky_model == "model-b"
+
+
+@pytest.mark.asyncio
+async def test_stream_timeout_opens_model_circuit_breaker_and_uses_fallback(
+    provider_config,
+):
+    req = MockRequest()
+    timeout_provider = NvidiaNimProvider(
+        provider_config.model_copy(update={"circuit_breaker_threshold": 1})
+    )
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [
+        MagicMock(
+            delta=MagicMock(content="Recovered", reasoning_content=""),
+            finish_reason="stop",
+        )
+    ]
+    mock_chunk.usage = None
+
+    async def mock_stream():
+        yield mock_chunk
+
+    with (
+        patch.object(
+            timeout_provider._client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            side_effect=[_make_timeout_error(), mock_stream()],
+        ) as mock_create,
+        patch.object(
+            timeout_provider, "_candidate_models", return_value=["model-a", "model-b"]
+        ),
+    ):
+        events = [event async for event in timeout_provider.stream_response(req)]
+
+    assert mock_create.await_count == 2
+    assert timeout_provider._get_model_cb("model-a").is_open
+    assert timeout_provider._sticky_model == "model-b"
+    assert any("Recovered" in event for event in events)
 
 
 @pytest.mark.asyncio

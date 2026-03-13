@@ -782,6 +782,12 @@
             "owned_by": "nvidia"
         },
         {
+            "id": "nvidia/nemotron-3-super-120b-a12b",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "nvidia"
+        },
+        {
             "id": "nvidia/nemotron-4-340b-instruct",
             "object": "model",
             "created": 735790403,
@@ -963,6 +969,12 @@
         },
         {
             "id": "qwen/qwen3.5-397b-a17b",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "qwen"
+        },
+        {
+            "id": "qwen/qwen3.5-122b-a10b",
             "object": "model",
             "created": 735790403,
             "owned_by": "qwen"

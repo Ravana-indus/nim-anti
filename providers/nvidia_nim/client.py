@@ -21,6 +21,7 @@ from threading import Lock
 from typing import Any, AsyncIterator, Optional
 
 import httpx
+import openai
 from openai import AsyncOpenAI
 
 from config.settings import get_model_fallback_chain
@@ -294,6 +295,31 @@ class NvidiaNimProvider(BaseProvider):
         message = str(exc).lower()
         return "model not found" in message or "does not exist" in message
 
+    @staticmethod
+    def _is_timeout_error(exc: Exception) -> bool:
+        return isinstance(exc, (openai.APITimeoutError, httpx.TimeoutException))
+
+    @classmethod
+    def _is_connection_error(cls, exc: Exception) -> bool:
+        return isinstance(exc, (openai.APIConnectionError, httpx.TransportError)) and not cls._is_timeout_error(exc)
+
+    @classmethod
+    def _is_transport_error(cls, exc: Exception) -> bool:
+        return cls._is_timeout_error(exc) or cls._is_connection_error(exc)
+
+    @classmethod
+    def _should_record_model_failure(cls, exc: Exception) -> bool:
+        status = cls._status_code(exc)
+        return bool((status and status >= 500) or cls._is_transport_error(exc))
+
+    def _describe_attempt_error(self, exc: Exception) -> str:
+        if self._is_timeout_error(exc):
+            timeout_display = int(self._request_timeout_sec)
+            return f"Timed out after {timeout_display}s"
+        if self._is_connection_error(exc):
+            return "Upstream connection error"
+        return str(exc)
+
     def set_sticky_model(self, model: Optional[str]) -> None:
         """Set sticky preferred model explicitly (e.g., from admin quick switch)."""
         with self._sticky_model_lock:
@@ -463,10 +489,10 @@ class NvidiaNimProvider(BaseProvider):
                     except Exception as e:
                         last_error = e
                         status_code = self._status_code(e)
+                        error_text = self._describe_attempt_error(e)
                         if status_code == 429:
                             await self._key_manager.record_rate_limit(key)
-                        # Record failure for per-model circuit breaker (only for server errors)
-                        if status_code and status_code >= 500:
+                        if self._should_record_model_failure(e):
                             await self._get_model_cb(model)._record_failure()
                         await self._record_attempt(
                             model=model,
@@ -481,10 +507,13 @@ class NvidiaNimProvider(BaseProvider):
                             key=key,
                             status="failed",
                             response_time_ms=(time.time() - attempt_start) * 1000,
-                            error=str(e)[:200],
+                            error=error_text[:200],
                         )
                         logger.warning(
-                            f"NIM_STREAM: model={model} key={key[:20]}... failed: {e}"
+                            "NIM_STREAM: model=%s key=%s... failed: %s",
+                            model,
+                            key[:20],
+                            error_text,
                         )
                         if self._is_bad_request_error(e):
                             abort_all = True
@@ -654,8 +683,11 @@ class NvidiaNimProvider(BaseProvider):
                     except Exception as e:
                         last_error = e
                         status_code = self._status_code(e)
+                        error_text = self._describe_attempt_error(e)
                         if status_code == 429:
                             await self._key_manager.record_rate_limit(key)
+                        if self._should_record_model_failure(e):
+                            await self._get_model_cb(model)._record_failure()
                         await self._record_attempt(
                             model=model,
                             key=key,
@@ -673,10 +705,13 @@ class NvidiaNimProvider(BaseProvider):
                             key=key,
                             status="failed",
                             response_time_ms=response_time_ms,
-                            error=str(e)[:200],
+                            error=error_text[:200],
                         )
                         logger.warning(
-                            f"NIM_COMPLETE: model={model} key={key[:20]}... failed: {e}"
+                            "NIM_COMPLETE: model=%s key=%s... failed: %s",
+                            model,
+                            key[:20],
+                            error_text,
                         )
                         if self._is_bad_request_error(e):
                             abort_all = True

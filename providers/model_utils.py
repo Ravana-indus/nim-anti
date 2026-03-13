@@ -47,21 +47,22 @@ def resolve_model_alias(model: str) -> str:
     candidate = model.strip()
     if not candidate:
         return model
+    normalized_candidate = candidate[1:] if candidate.startswith("/") else candidate
 
     catalog = _load_nim_model_catalog()
     if not catalog:
-        return model
+        return normalized_candidate
 
     # Exact match already valid.
-    if candidate in catalog:
-        return candidate
+    if normalized_candidate in catalog:
+        return normalized_candidate
 
     # Providerless shorthand: match unique tail `<provider>/<name>`.
-    tail_matches = [item for item in catalog if item.endswith(f"/{candidate}")]
+    tail_matches = [item for item in catalog if item.endswith(f"/{normalized_candidate}")]
     if len(tail_matches) == 1:
         return tail_matches[0]
 
-    return model
+    return normalized_candidate
 
 
 def strip_provider_prefixes(model: str) -> str:
