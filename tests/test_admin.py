@@ -204,6 +204,61 @@ def test_admin_model_catalog_endpoint():
     assert len(payload["models"]) <= 50
 
 
+def test_admin_update_fallback_order_endpoint():
+    client = TestClient(app)
+    with patch(
+        "api.admin.persist_fallback_models_to_env",
+        return_value={
+            "fallback_models": ["model-c", "model-a", "model-b"],
+            "default_model": "model-c",
+        },
+    ) as mock_persist:
+        response = client.post(
+            "/admin/fallback-order",
+            json={
+                "models": ["model-c", "model-a", "model-b"],
+                "persist_default_for_next_restart": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "updated"
+    assert payload["configured_fallback_models"] == ["model-c", "model-a", "model-b"]
+    assert payload["persisted_default_model"] is True
+    mock_persist.assert_called_once_with(
+        ["model-c", "model-a", "model-b"],
+        persist_default_for_next_restart=True,
+    )
+
+
+def test_admin_update_fallback_order_does_not_change_runtime_override():
+    client = TestClient(app)
+    with (
+        patch(
+            "api.admin.persist_fallback_models_to_env",
+            return_value={
+                "fallback_models": ["model-c", "model-a", "model-b"],
+                "default_model": "model-c",
+            },
+        ),
+        patch("api.admin.get_active_model", return_value="runtime-model"),
+        patch("api.admin.has_active_model_override", return_value=True),
+    ):
+        response = client.post(
+            "/admin/fallback-order",
+            json={
+                "models": ["model-c", "model-a", "model-b"],
+                "persist_default_for_next_restart": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("active_model") == "runtime-model"
+    assert payload.get("has_runtime_model_override") is True
+
+
 def test_model_performance_avg_latency_uses_success_only():
     client = TestClient(app)
     request_logs.clear()

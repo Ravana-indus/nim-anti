@@ -1,4 +1,5 @@
 import pytest
+import config.settings as settings_module
 
 from providers.model_utils import (
     strip_provider_prefixes,
@@ -89,6 +90,33 @@ def test_get_model_fallback_chain_primary_first(monkeypatch):
         ]
     finally:
         get_settings.cache_clear()
+
+
+def test_persist_fallback_models_to_env_updates_fallback_and_model(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        'MODEL="old-model"\nNVIDIA_NIM_FALLBACK_MODELS="model-a,model-b"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "providers.model_utils._load_nim_model_catalog",
+        lambda: ["vendor-a/model-a", "vendor-b/model-b", "vendor-c/model-c"],
+    )
+
+    try:
+        result = settings_module.persist_fallback_models_to_env(
+            ["/vendor-c/model-c", "vendor-a/model-a", "vendor-a/model-a"],
+            persist_default_for_next_restart=True,
+            env_path=str(env_path),
+        )
+    finally:
+        settings_module.clear_runtime_fallback_models()
+
+    written = env_path.read_text(encoding="utf-8")
+    assert result["fallback_models"] == ["vendor-c/model-c", "vendor-a/model-a"]
+    assert result["default_model"] == "vendor-c/model-c"
+    assert 'NVIDIA_NIM_FALLBACK_MODELS="vendor-c/model-c,vendor-a/model-a"' in written
+    assert 'MODEL="vendor-c/model-c"' in written
 
 
 # --- Parametrized Edge Case Tests ---

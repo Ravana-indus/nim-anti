@@ -21,6 +21,7 @@ from config.settings import (
     get_model_fallback_chain,
     get_settings,
     has_active_model_override,
+    persist_fallback_models_to_env,
     persist_model_to_env,
     set_active_model,
 )
@@ -65,6 +66,11 @@ manager = ConnectionManager()
 class ActiveModelUpdateRequest(BaseModel):
     model: str
     persist: bool = False
+
+
+class FallbackOrderUpdateRequest(BaseModel):
+    models: list[str]
+    persist_default_for_next_restart: bool = False
 
 
 _model_catalog_cache: Optional[list[str]] = None
@@ -818,13 +824,27 @@ async def get_detailed_health():
 # =============================================================================
 
 @router.post("/fallback-order")
-async def update_fallback_order(models: list[str]):
-    """Update fallback model order (runtime only)."""
-    # This would require modifying settings at runtime
+async def update_fallback_order(payload: FallbackOrderUpdateRequest):
+    """Update configured fallback model order and persist it to .env."""
+    try:
+        persisted = persist_fallback_models_to_env(
+            payload.models,
+            persist_default_for_next_restart=payload.persist_default_for_next_restart,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    active_model = get_active_model()
+    settings = get_settings()
     return {
-        "status": "not_implemented",
-        "message": "Fallback order is configured via NVIDIA_NIM_FALLBACK_MODELS in .env",
-        "current": get_configured_fallback_models(),
+        "status": "updated",
+        "configured_fallback_models": persisted["fallback_models"],
+        "fallback_models": get_model_fallback_chain(active_model),
+        "active_model": active_model,
+        "default_model": settings.model,
+        "has_runtime_model_override": has_active_model_override(),
+        "persisted_default_model": payload.persist_default_for_next_restart,
+        "next_restart_default_model": persisted["default_model"],
     }
 
 

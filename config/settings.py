@@ -127,6 +127,7 @@ def get_settings() -> Settings:
 
 _active_model_lock = Lock()
 _active_model_override: Optional[str] = None
+_configured_fallback_models_override: Optional[tuple[str, ...]] = None
 
 
 def get_active_model() -> str:
@@ -173,45 +174,106 @@ def persist_model_to_env(model: str, env_path: str = ".env") -> str:
     if not normalized:
         raise ValueError("model cannot be empty")
 
+    _persist_env_values({"MODEL": normalized}, env_path=env_path)
+    get_settings.cache_clear()
+    return normalized
+
+
+def _persist_env_values(updates: dict[str, str], env_path: str = ".env") -> None:
+    """Persist one or more env vars to a dotenv file."""
+    if not updates:
+        return
+
     path = Path(env_path)
     if path.exists():
         lines = path.read_text(encoding="utf-8").splitlines()
     else:
         lines = []
 
-    replaced = False
+    remaining = dict(updates)
     updated: list[str] = []
     for line in lines:
-        if line.startswith("MODEL="):
-            updated.append(f'MODEL="{normalized}"')
-            replaced = True
+        replaced_key = next((key for key in remaining if line.startswith(f"{key}=")), None)
+        if replaced_key:
+            updated.append(f'{replaced_key}="{remaining.pop(replaced_key)}"')
         else:
             updated.append(line)
 
-    if not replaced:
+    if remaining:
         if updated and updated[-1].strip():
             updated.append("")
-        updated.append(f'MODEL="{normalized}"')
+        for key, value in remaining.items():
+            updated.append(f'{key}="{value}"')
 
     path.write_text("\n".join(updated) + "\n", encoding="utf-8")
-    get_settings.cache_clear()
+
+
+def normalize_fallback_models(models: list[str]) -> list[str]:
+    """Normalize and dedupe configured fallback model order."""
+    from providers.model_utils import resolve_model_alias
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for model in models:
+        resolved = resolve_model_alias(str(model).strip())
+        if not resolved:
+            continue
+        if resolved not in seen:
+            normalized.append(resolved)
+            seen.add(resolved)
+
+    if not normalized:
+        raise ValueError("fallback models cannot be empty")
     return normalized
+
+
+def set_runtime_fallback_models(models: list[str]) -> list[str]:
+    """Set runtime configured fallback order without changing runtime active model."""
+    global _configured_fallback_models_override
+    normalized = normalize_fallback_models(models)
+    _configured_fallback_models_override = tuple(normalized)
+    return normalized
+
+
+def clear_runtime_fallback_models() -> None:
+    """Clear runtime configured fallback override."""
+    global _configured_fallback_models_override
+    _configured_fallback_models_override = None
+
+
+def persist_fallback_models_to_env(
+    models: list[str],
+    persist_default_for_next_restart: bool = False,
+    env_path: str = ".env",
+) -> dict[str, Optional[str] | list[str]]:
+    """Persist fallback order and optionally next-restart MODEL to .env."""
+    normalized = normalize_fallback_models(models)
+    updates = {
+        "NVIDIA_NIM_FALLBACK_MODELS": ",".join(normalized),
+    }
+    default_model: Optional[str] = None
+    if persist_default_for_next_restart:
+        default_model = normalized[0]
+        updates["MODEL"] = default_model
+
+    _persist_env_values(updates, env_path=env_path)
+    set_runtime_fallback_models(normalized)
+    return {
+        "fallback_models": normalized,
+        "default_model": default_model,
+    }
 
 
 def get_configured_fallback_models() -> list[str]:
     """Get configured fallback model order with canonical IDs."""
-    from providers.model_utils import resolve_model_alias
+    if _configured_fallback_models_override is not None:
+        return list(_configured_fallback_models_override)
 
     raw = get_settings().nvidia_nim_fallback_models
-    models = [resolve_model_alias(part.strip()) for part in raw.split(",") if part.strip()]
-
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for model in models:
-        if model not in seen:
-            deduped.append(model)
-            seen.add(model)
-    return deduped
+    models = [part.strip() for part in raw.split(",") if part.strip()]
+    if not models:
+        return []
+    return normalize_fallback_models(models)
 
 
 def get_model_fallback_chain(primary_model: Optional[str] = None) -> list[str]:

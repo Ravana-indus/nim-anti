@@ -4,6 +4,11 @@ let ws = null;
 let modelCatalogLoaded = false;
 let currentMetricsPeriod = '1h';
 let currentTheme = 'dark';
+let latestDashboardData = null;
+let fallbackOrderOriginal = [];
+let fallbackOrderState = [];
+let fallbackOrderDirty = false;
+let fallbackDragIndex = null;
 
 // Request details cache for inspector
 let requestDetailsCache = {};
@@ -177,6 +182,8 @@ function loadDashboard() {
 }
 
 function updateDashboard(data) {
+    latestDashboardData = data;
+
     // Update header stats
     const agg = data.aggregate || {};
     document.getElementById('rpm-stat').textContent = `RPM: ${agg.requests_per_minute || 0}`;
@@ -212,36 +219,14 @@ function updateDashboard(data) {
     }
     
     // Fallback summary
-    const fallbackInfo = document.getElementById('fallback-info');
     const blockedKeys = (data.keys || []).filter(k => k.blocked).length;
     const fallbackModels = (data.fallback_models || []);
-    fallbackInfo.innerHTML = `
-        <div class="settings-item">
-            <span class="settings-label">Strategy</span>
-            <span class="settings-value">Model fallback + API key rotation</span>
-        </div>
-        <div class="settings-item">
-            <span class="settings-label">Fallback Order</span>
-            <span class="settings-value">${fallbackModels.length || 1} models</span>
-        </div>
-        <div class="settings-item">
-            <span class="settings-label">Total Keys</span>
-            <span class="settings-value">${(data.keys || []).length}</span>
-        </div>
-        <div class="settings-item">
-            <span class="settings-label">Blocked Keys</span>
-            <span class="settings-value">${blockedKeys}</span>
-        </div>
-    `;
-    fallbackModels.forEach((model, idx) => {
-        const div = document.createElement('div');
-        div.className = idx === 0 ? 'model-item primary' : 'model-item fallback';
-        div.innerHTML = `
-            <span class="model-name">${escapeHtml(model)}</span>
-            <span class="model-pos">${idx === 0 ? 'primary' : `fallback ${idx}`}</span>
-        `;
-        fallbackInfo.appendChild(div);
-    });
+    const configuredFallbackModels = data.configured_fallback_models || [];
+    if (!fallbackOrderDirty) {
+        fallbackOrderOriginal = [...configuredFallbackModels];
+        fallbackOrderState = [...configuredFallbackModels];
+    }
+    renderFallbackCard(data, fallbackModels, blockedKeys);
 
     const quickModelsEl = document.getElementById('quick-models');
     const quickSwitchModels = data.quick_switch_models || [];
@@ -370,6 +355,198 @@ function addLogEntry(log) {
     while (tbody.children.length > 200) {
         tbody.removeChild(tbody.lastChild);
     }
+}
+
+function renderFallbackCard(data, fallbackModels, blockedKeys) {
+    const fallbackInfo = document.getElementById('fallback-info');
+    if (!fallbackInfo) return;
+
+    const configuredCount = fallbackOrderState.length;
+    const usesOverride = !!data.has_runtime_model_override;
+    fallbackInfo.innerHTML = `
+        <div class="settings-item">
+            <span class="settings-label">Strategy</span>
+            <span class="settings-value">Model fallback + API key rotation</span>
+        </div>
+        <div class="settings-item">
+            <span class="settings-label">Effective Order</span>
+            <span class="settings-value">${fallbackModels.length || 1} models</span>
+        </div>
+        <div class="settings-item">
+            <span class="settings-label">Configured Fallbacks</span>
+            <span class="settings-value">${configuredCount}</span>
+        </div>
+        <div class="settings-item">
+            <span class="settings-label">Blocked Keys</span>
+            <span class="settings-value">${blockedKeys}</span>
+        </div>
+        <div class="fallback-editor-note">
+            ${usesOverride
+                ? 'Runtime active model is currently prepended ahead of this saved fallback order.'
+                : 'This saved order is used immediately for fallback decisions and persists across restart.'}
+        </div>
+    `;
+
+    const list = document.createElement('div');
+    list.className = 'fallback-editor-list';
+
+    if (fallbackOrderState.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'fallback-editor-empty';
+        empty.textContent = 'No configured fallback models';
+        list.appendChild(empty);
+    } else {
+        fallbackOrderState.forEach((model, idx) => {
+            const row = document.createElement('div');
+            row.className = 'model-item fallback fallback-draggable-row draggable';
+            row.draggable = true;
+            row.dataset.index = String(idx);
+            row.innerHTML = `
+                <div class="fallback-row-main">
+                    <span class="fallback-drag-handle" aria-hidden="true">⋮⋮</span>
+                    <span class="model-name">${escapeHtml(model)}</span>
+                </div>
+                <span class="model-pos">fallback ${idx + 1}</span>
+            `;
+            row.addEventListener('dragstart', onFallbackDragStart);
+            row.addEventListener('dragover', onFallbackDragOver);
+            row.addEventListener('drop', onFallbackDrop);
+            row.addEventListener('dragend', onFallbackDragEnd);
+            list.appendChild(row);
+        });
+    }
+
+    fallbackInfo.appendChild(list);
+    updateFallbackOrderControls();
+}
+
+function updateFallbackOrderControls() {
+    const saveBtn = document.getElementById('save-fallback-order-btn');
+    const resetBtn = document.getElementById('reset-fallback-order-btn');
+    if (saveBtn) {
+        saveBtn.disabled = !fallbackOrderDirty || fallbackOrderState.length === 0;
+    }
+    if (resetBtn) {
+        resetBtn.disabled = !fallbackOrderDirty;
+    }
+}
+
+function setFallbackOrderStatus(message, type = '') {
+    const statusEl = document.getElementById('fallback-order-status');
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.className = `model-status${type ? ` ${type}` : ''}`;
+}
+
+function clearFallbackDragStyles() {
+    document.querySelectorAll('.fallback-draggable-row').forEach((row) => {
+        row.classList.remove('dragging', 'drag-over');
+    });
+}
+
+function onFallbackDragStart(event) {
+    fallbackDragIndex = Number(event.currentTarget.dataset.index);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(fallbackDragIndex));
+    event.currentTarget.classList.add('dragging');
+}
+
+function onFallbackDragOver(event) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    event.currentTarget.classList.add('drag-over');
+}
+
+function onFallbackDrop(event) {
+    event.preventDefault();
+    const targetIndex = Number(event.currentTarget.dataset.index);
+    clearFallbackDragStyles();
+
+    if (!Number.isInteger(fallbackDragIndex) || fallbackDragIndex < 0 || targetIndex < 0) {
+        fallbackDragIndex = null;
+        return;
+    }
+
+    if (fallbackDragIndex !== targetIndex) {
+        const reordered = [...fallbackOrderState];
+        const [movedModel] = reordered.splice(fallbackDragIndex, 1);
+        reordered.splice(targetIndex, 0, movedModel);
+        fallbackOrderState = reordered;
+        fallbackOrderDirty = JSON.stringify(fallbackOrderState) !== JSON.stringify(fallbackOrderOriginal);
+        renderFallbackCard(latestDashboardData || {}, latestDashboardData?.fallback_models || [], (latestDashboardData?.keys || []).filter(k => k.blocked).length);
+        setFallbackOrderStatus('Fallback order changed. Save to persist it.', '');
+    }
+
+    fallbackDragIndex = null;
+}
+
+function onFallbackDragEnd() {
+    fallbackDragIndex = null;
+    clearFallbackDragStyles();
+}
+
+function saveFallbackOrder() {
+    if (!fallbackOrderDirty || fallbackOrderState.length === 0) {
+        return;
+    }
+
+    const persistDefault = !!document.getElementById('persist-fallback-default-checkbox')?.checked;
+    setFallbackOrderStatus('Saving fallback order...', '');
+
+    fetch('/admin/fallback-order', {
+        method: 'POST',
+        headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            models: fallbackOrderState,
+            persist_default_for_next_restart: persistDefault
+        })
+    })
+    .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || 'Failed to save fallback order');
+        }
+        return data;
+    })
+    .then((data) => {
+        fallbackOrderOriginal = [...(data.configured_fallback_models || fallbackOrderState)];
+        fallbackOrderState = [...fallbackOrderOriginal];
+        fallbackOrderDirty = false;
+        renderFallbackCard(data, data.fallback_models || [], (latestDashboardData?.keys || []).filter(k => k.blocked).length);
+
+        if (data.persisted_default_model && data.next_restart_default_model) {
+            setFallbackOrderStatus(
+                `Fallback order saved. MODEL will switch to ${data.next_restart_default_model} on next restart.`,
+                'success'
+            );
+        } else {
+            setFallbackOrderStatus('Fallback order saved.', 'success');
+        }
+
+        latestDashboardData = data;
+        loadDashboard();
+    })
+    .catch((err) => {
+        console.error('Error saving fallback order:', err);
+        setFallbackOrderStatus(err.message || 'Error saving fallback order', 'error');
+    });
+}
+
+function resetFallbackOrder() {
+    fallbackOrderState = [...fallbackOrderOriginal];
+    fallbackOrderDirty = false;
+    clearFallbackDragStyles();
+    if (latestDashboardData) {
+        renderFallbackCard(
+            latestDashboardData,
+            latestDashboardData.fallback_models || [],
+            (latestDashboardData.keys || []).filter(k => k.blocked).length
+        );
+    }
+    setFallbackOrderStatus('Unsaved fallback order changes discarded.', '');
 }
 
 function inspectLog(requestId, model, keySuffix, error) {

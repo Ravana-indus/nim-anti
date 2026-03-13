@@ -200,6 +200,52 @@ main {
     font-size: var(--text-xs);
 }
 
+.fallback-editor-note {
+    margin-top: var(--space-3);
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+}
+
+.fallback-editor-list {
+    margin-top: var(--space-4);
+}
+
+.fallback-editor-empty {
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+}
+
+.fallback-draggable-row {
+    cursor: grab;
+    border: 1px solid transparent;
+    user-select: none;
+}
+
+.fallback-draggable-row.dragging {
+    opacity: 0.6;
+}
+
+.fallback-draggable-row.drag-over {
+    border-color: var(--accent-primary);
+    background: var(--bg-surface-hover);
+}
+
+.fallback-row-main {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+.fallback-drag-handle {
+    color: var(--text-tertiary);
+    font-size: var(--text-lg);
+    line-height: 1;
+}
+
 /* Health bar */
 .health-bar {
     width: 100px;

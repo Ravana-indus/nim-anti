@@ -67,6 +67,17 @@
                     <div class="card">
                         <h3>Fallback Chain</h3>
                         <div id="fallback-info"></div>
+                        <div class="model-controls">
+                            <label class="model-persist">
+                                <input type="checkbox" id="persist-fallback-default-checkbox">
+                                Also set first model as `MODEL` in `.env` for next restart
+                            </label>
+                        </div>
+                        <div class="model-controls">
+                            <button class="primary-btn" id="save-fallback-order-btn" onclick="saveFallbackOrder()" disabled>Save Order</button>
+                            <button class="action-btn" id="reset-fallback-order-btn" onclick="resetFallbackOrder()" disabled>Reset</button>
+                        </div>
+                        <div id="fallback-order-status" class="model-status"></div>
                     </div>
 
                     <div class="card">
