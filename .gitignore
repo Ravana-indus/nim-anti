@@ -3,6 +3,7 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .serena
+.worktrees
 .venv
 agent_workspace
 .env
