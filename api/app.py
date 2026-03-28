@@ -22,6 +22,7 @@ except ImportError:
 
 from .routes import router
 from .admin import router as admin_router
+from .openai_routes import router as openai_router
 from .dependencies import cleanup_provider
 from providers.exceptions import ProviderError
 from config.settings import get_settings
@@ -176,6 +177,7 @@ def create_app() -> FastAPI:
     # Register routes
     app.include_router(router)
     app.include_router(admin_router)
+    app.include_router(openai_router)
 
     # GZip compression for responses > 500 bytes
     app.add_middleware(GZipMiddleware, minimum_size=500)
