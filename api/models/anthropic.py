@@ -112,10 +112,26 @@ class MessagesRequest(BaseModel):
 
     @model_validator(mode="after")
     def map_model(self) -> "MessagesRequest":
-        """Map any Claude model name to the configured NIM model."""
+        """Map model name. Supports per-request override via metadata.model."""
         if self.original_model is None:
             self.original_model = self.model
 
+        # Per-request model override: metadata.model takes priority.
+        # This allows tools to specify a specific NIM model directly.
+        from providers.model_utils import resolve_model_alias
+
+        metadata_model = None
+        if self.metadata and isinstance(self.metadata, dict):
+            metadata_model = self.metadata.get("model")
+
+        if metadata_model and isinstance(metadata_model, str) and metadata_model.strip():
+            resolved = resolve_model_alias(metadata_model.strip())
+            if resolved != self.model:
+                logger.debug(f"MODEL OVERRIDE (metadata): '{self.model}' -> '{resolved}'")
+                self.model = resolved
+            return self
+
+        # Default: map Claude model names to the configured NIM model.
         mapped = normalize_model_name(self.model, get_active_model())
         if mapped != self.model:
             logger.debug(f"MODEL MAPPING: '{self.model}' -> '{mapped}'")

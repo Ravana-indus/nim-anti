@@ -44,6 +44,17 @@ async def create_message(
 ):
     """Create a message (streaming or non-streaming)."""
 
+    # Header-based model override: X-Model-Override takes priority.
+    # Lets tools specify a model via header without touching the body.
+    header_model = raw_request.headers.get("x-model-override")
+    if header_model and header_model.strip():
+        from providers.model_utils import resolve_model_alias
+
+        resolved = resolve_model_alias(header_model.strip())
+        if resolved != request_data.model:
+            logger.info(f"MODEL OVERRIDE (header): '{request_data.model}' -> '{resolved}'")
+            request_data.model = resolved
+
     try:
         if settings.fast_prefix_detection:
             is_prefix_req, command = is_prefix_detection_request(request_data)
