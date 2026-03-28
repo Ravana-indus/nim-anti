@@ -164,7 +164,8 @@ async def _stream_openai(provider, body: dict):
                     req_body = dict(body)
                     req_body["model"] = candidate
 
-                    stream = await client.chat.completions.create(**req_body, stream=True)
+                    req_body["stream"] = True  # ensure stream is set
+                    stream = await client.chat.completions.create(**req_body)
                     async for chunk in stream:
                         data = chunk.model_dump_json()
                         yield f"data: {data}\n\n"
