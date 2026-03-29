@@ -483,9 +483,8 @@ class NvidiaNimProvider(BaseProvider):
                                     for event in sse.ensure_thinking_block():
                                         yield event
                                     yield sse.emit_thinking_delta(reasoning)
-                                    # Skip ThinkTagParser if we already handled reasoning_content
-                                    # to avoid duplicate thinking output
-                                    continue
+                                    # We don't 'continue' here anymore, because some models 
+                                    # might send both fields in the same chunk (Item 14).
 
                                 content = delta.get("content")
                                 if content:
@@ -538,6 +537,22 @@ class NvidiaNimProvider(BaseProvider):
                                         }
                                         for event in self._process_tool_call(tc_info, sse):
                                             yield event
+                                    
+                                # Item 15: Ensure all blocks are closed and flushed on finish
+                                if fr:
+                                    rem = think_parser.flush()
+                                    if rem:
+                                        if rem.type == ContentType.THINKING:
+                                            for event in sse.ensure_thinking_block():
+                                                yield event
+                                            yield sse.emit_thinking_delta(rem.content)
+                                        else:
+                                            for event in sse.ensure_text_block():
+                                                yield event
+                                            yield sse.emit_text_delta(rem.content)
+
+                                    for event in sse.close_all_blocks():
+                                        yield event
 
                         stream_succeeded = True
                         await self._key_manager.record_success(key)
