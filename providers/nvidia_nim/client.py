@@ -237,6 +237,16 @@ class NvidiaNimProvider(BaseProvider):
         """Internal helper for tests and shared building."""
         return build_request_body(request, self._nim_settings, stream=stream)
 
+    @staticmethod
+    def _flatten_body_for_raw(body: dict) -> bytes:
+        """Flatten SDK-style body (with extra_body) into raw JSON bytes for httpx."""
+        flat = {k: v for k, v in body.items() if k != "extra_body"}
+        extra = body.get("extra_body")
+        if extra:
+            flat.update(extra)
+        s = _fast_json_dumps(flat)
+        return s.encode() if isinstance(s, str) else s
+
     def _get_model_cb(self, model: str) -> CircuitBreaker:
         """Get or create a circuit breaker for a specific model."""
         if model not in self._model_circuit_breakers:
@@ -398,79 +408,111 @@ class NvidiaNimProvider(BaseProvider):
                         used_model = model
                         body = dict(base_body)
                         body["model"] = model
-                        client = await self._get_client(key)
+                        body["stream"] = True
+                        raw_body = self._flatten_body_for_raw(body)
 
-                        stream = await client.chat.completions.create(**body, stream=True)
-                        async for chunk in stream:
-                            if getattr(chunk, "usage", None):
-                                usage_info = chunk.usage
+                        # Raw httpx streaming — no SDK Pydantic overhead
+                        async with self._http_client.stream(
+                            "POST",
+                            f"{self._base_url}/chat/completions",
+                            content=raw_body,
+                            headers={
+                                "Authorization": f"Bearer {key}",
+                                "Content-Type": "application/json",
+                                "Accept": "text/event-stream",
+                            },
+                        ) as raw_resp:
+                            if raw_resp.status_code != 200:
+                                err_body = await raw_resp.aread()
+                                err_msg = err_body.decode(errors="replace")[:200]
+                                exc = Exception(f"HTTP {raw_resp.status_code}: {err_msg}")
+                                exc.status_code = raw_resp.status_code
+                                raise exc
 
-                            if not chunk.choices:
-                                continue
+                            async for line in raw_resp.aiter_lines():
+                                if not line.startswith("data: "):
+                                    continue
+                                payload = line[6:]
+                                if payload.strip() == "[DONE]":
+                                    break
 
-                            choice = chunk.choices[0]
-                            delta = choice.delta
+                                chunk = _fast_json_loads(payload)
 
-                            if choice.finish_reason:
-                                finish_reason = choice.finish_reason
+                                chunk_usage = chunk.get("usage")
+                                if chunk_usage:
+                                    usage_info = type("U", (), chunk_usage)()
 
-                            reasoning = getattr(delta, "reasoning_content", None)
-                            if reasoning:
-                                for event in sse.ensure_thinking_block():
-                                    yield event
-                                yield sse.emit_thinking_delta(reasoning)
-                                # Skip ThinkTagParser if we already handled reasoning_content
-                                # to avoid duplicate thinking output
-                                continue
+                                choices = chunk.get("choices")
+                                if not choices:
+                                    continue
 
-                            if delta.content:
-                                for part in think_parser.feed(delta.content):
-                                    if part.type == ContentType.THINKING:
-                                        for event in sse.ensure_thinking_block():
-                                            yield event
-                                        yield sse.emit_thinking_delta(part.content)
-                                    else:
-                                        filtered_text, detected_tools = heuristic_parser.feed(
-                                            part.content
-                                        )
+                                choice = choices[0]
+                                delta = choice.get("delta") or {}
 
-                                        if filtered_text:
-                                            for event in sse.ensure_text_block():
-                                                yield event
-                                            yield sse.emit_text_delta(filtered_text)
+                                fr = choice.get("finish_reason")
+                                if fr:
+                                    finish_reason = fr
 
-                                        for tool_use in detected_tools:
-                                            for event in sse.close_content_blocks():
-                                                yield event
-
-                                            block_idx = sse.blocks.allocate_index()
-                                            yield sse.content_block_start(
-                                                block_idx,
-                                                "tool_use",
-                                                id=tool_use["id"],
-                                                name=tool_use["name"],
-                                            )
-                                            yield sse.content_block_delta(
-                                                block_idx,
-                                                "input_json_delta",
-                                                _fast_json_dumps(tool_use["input"]),
-                                            )
-                                            yield sse.content_block_stop(block_idx)
-
-                            if delta.tool_calls:
-                                for event in sse.close_content_blocks():
-                                    yield event
-                                for tc in delta.tool_calls:
-                                    tc_info = {
-                                        "index": tc.index,
-                                        "id": tc.id,
-                                        "function": {
-                                            "name": tc.function.name,
-                                            "arguments": tc.function.arguments,
-                                        },
-                                    }
-                                    for event in self._process_tool_call(tc_info, sse):
+                                reasoning = delta.get("reasoning_content")
+                                if reasoning:
+                                    for event in sse.ensure_thinking_block():
                                         yield event
+                                    yield sse.emit_thinking_delta(reasoning)
+                                    # Skip ThinkTagParser if we already handled reasoning_content
+                                    # to avoid duplicate thinking output
+                                    continue
+
+                                content = delta.get("content")
+                                if content:
+                                    for part in think_parser.feed(content):
+                                        if part.type == ContentType.THINKING:
+                                            for event in sse.ensure_thinking_block():
+                                                yield event
+                                            yield sse.emit_thinking_delta(part.content)
+                                        else:
+                                            filtered_text, detected_tools = heuristic_parser.feed(
+                                                part.content
+                                            )
+
+                                            if filtered_text:
+                                                for event in sse.ensure_text_block():
+                                                    yield event
+                                                yield sse.emit_text_delta(filtered_text)
+
+                                            for tool_use in detected_tools:
+                                                for event in sse.close_content_blocks():
+                                                    yield event
+
+                                                block_idx = sse.blocks.allocate_index()
+                                                yield sse.content_block_start(
+                                                    block_idx,
+                                                    "tool_use",
+                                                    id=tool_use["id"],
+                                                    name=tool_use["name"],
+                                                )
+                                                yield sse.content_block_delta(
+                                                    block_idx,
+                                                    "input_json_delta",
+                                                    _fast_json_dumps(tool_use["input"]),
+                                                )
+                                                yield sse.content_block_stop(block_idx)
+
+                                tool_calls = delta.get("tool_calls")
+                                if tool_calls:
+                                    for event in sse.close_content_blocks():
+                                        yield event
+                                    for tc in tool_calls:
+                                        fn = tc.get("function") or {}
+                                        tc_info = {
+                                            "index": tc.get("index", 0),
+                                            "id": tc.get("id"),
+                                            "function": {
+                                                "name": fn.get("name"),
+                                                "arguments": fn.get("arguments", ""),
+                                            },
+                                        }
+                                        for event in self._process_tool_call(tc_info, sse):
+                                            yield event
 
                         stream_succeeded = True
                         await self._key_manager.record_success(key)
@@ -657,8 +699,25 @@ class NvidiaNimProvider(BaseProvider):
                         used_model = model
                         body = dict(base_body)
                         body["model"] = model
-                        client = await self._get_client(key)
-                        response = await client.chat.completions.create(**body)
+                        raw_body = self._flatten_body_for_raw(body)
+
+                        # Raw httpx — no SDK Pydantic overhead
+                        resp = await self._http_client.post(
+                            f"{self._base_url}/chat/completions",
+                            content=raw_body,
+                            headers={
+                                "Authorization": f"Bearer {key}",
+                                "Content-Type": "application/json",
+                                "Accept": "application/json",
+                            },
+                        )
+                        if resp.status_code != 200:
+                            err_msg = resp.text[:200]
+                            exc = Exception(f"HTTP {resp.status_code}: {err_msg}")
+                            exc.status_code = resp.status_code
+                            raise exc
+
+                        response_json = _fast_json_loads(resp.content)
 
                         await self._key_manager.record_success(key)
                         await self._record_attempt(
@@ -679,7 +738,7 @@ class NvidiaNimProvider(BaseProvider):
                         )
                         self._remember_working_model(model)
 
-                        return response.model_dump()
+                        return response_json
                     except Exception as e:
                         last_error = e
                         status_code = self._status_code(e)
