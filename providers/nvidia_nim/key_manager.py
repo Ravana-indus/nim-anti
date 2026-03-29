@@ -83,36 +83,42 @@ class NimKeyManager:
         now = time.monotonic()
 
         async with self._lock:
-            candidates = [k for k in self._keys if k not in excluded and self._is_available(k, now)]
-            if not candidates:
+            best_key = None
+            best_remaining = -1
+            best_in_flight = float("inf")
+
+            for k in self._keys:
+                if k in excluded:
+                    continue
+                # Amortized pruning — only prune when deque overshoots
+                q = self._requests[k]
+                if len(q) > self._rate_limit:
+                    window_start = now - self._rate_window
+                    while q and q[0] <= window_start:
+                        q.popleft()
+                if self._cooldown_until[k] > now:
+                    continue
+                remaining = self._rate_limit - len(q)
+                if remaining <= 0:
+                    # Full prune to be sure
+                    self._prune(k, now)
+                    remaining = self._rate_limit - len(q)
+                    if remaining <= 0:
+                        continue
+
+                in_flight = self._in_flight[k]
+                # Select key with most remaining capacity, break ties by lowest in-flight
+                if remaining > best_remaining or (remaining == best_remaining and in_flight < best_in_flight):
+                    best_key = k
+                    best_remaining = remaining
+                    best_in_flight = in_flight
+
+            if best_key is None:
                 return None
 
-            # Prefer highest remaining capacity and lowest in-flight.
-            def score(k: str) -> tuple[int, int]:
-                remaining = self._rate_limit - len(self._requests[k])
-                return (remaining, -self._in_flight[k])
-
-            best_remaining = max(score(k)[0] for k in candidates)
-            tied = [k for k in candidates if score(k)[0] == best_remaining]
-            min_in_flight = min(self._in_flight[k] for k in tied)
-            tied = [k for k in tied if self._in_flight[k] == min_in_flight]
-
-            # Round-robin fallback among equals.
-            if len(tied) > 1:
-                start = self._rr_index % len(self._keys)
-                order = self._keys[start:] + self._keys[:start]
-                for k in order:
-                    if k in tied:
-                        selected = k
-                        break
-                self._rr_index = (self._keys.index(selected) + 1) % len(self._keys)
-            else:
-                selected = tied[0]
-                self._rr_index = (self._keys.index(selected) + 1) % len(self._keys)
-
-            self._requests[selected].append(now)
-            self._in_flight[selected] += 1
-            return KeyLease(manager=self, key=selected)
+            self._requests[best_key].append(now)
+            self._in_flight[best_key] += 1
+            return KeyLease(manager=self, key=best_key)
 
     async def release(self, key: str) -> None:
         async with self._lock:

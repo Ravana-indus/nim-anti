@@ -15,12 +15,6 @@ except ImportError:
         """Fallback to standard json."""
         return json.dumps(obj)
 
-try:
-    import tiktoken
-
-    ENCODER = tiktoken.get_encoding("cl100k_base")
-except Exception:
-    ENCODER = None
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +79,8 @@ class SSEBuilder:
     def _format_event(self, event_type: str, data: Dict[str, Any]) -> str:
         """Format as SSE string using fast JSON serialization."""
         event_str = f"event: {event_type}\ndata: {_json_dumps(data)}\n\n"
-        logger.debug(f"SSE_EVENT: {event_type} - {event_str.strip()}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("SSE_EVENT: %s", event_type)
         return event_str
 
     # Message lifecycle events
@@ -276,22 +271,16 @@ class SSEBuilder:
         return self._accumulated_reasoning
 
     def estimate_output_tokens(self) -> int:
-        """Estimate output tokens from accumulated content."""
-        if ENCODER:
-            text_tokens = len(ENCODER.encode(self._accumulated_text))
-            reasoning_tokens = len(ENCODER.encode(self._accumulated_reasoning))
-            # Tool calls are harder to tokenize exactly without reconstruction, but we can approximate
-            # by tokenizing the json dumps of tool contents
-            tool_tokens = 0
-            for idx, content in self.blocks.tool_contents.items():
-                name = self.blocks.tool_names.get(idx, "")
-                tool_tokens += len(ENCODER.encode(name))
-                tool_tokens += len(ENCODER.encode(content))
-                tool_tokens += 10  # Control tokens overhead
+        """Fast token estimate from accumulated content.
 
-            return text_tokens + reasoning_tokens + tool_tokens
-
+        Uses ~4 chars/token heuristic to avoid blocking the event loop
+        with expensive tiktoken encoding. This is only called as a fallback
+        when the upstream doesn't provide usage info in the final chunk.
+        """
         text_tokens = len(self._accumulated_text) // 4
         reasoning_tokens = len(self._accumulated_reasoning) // 4
-        tool_tokens = len(self.blocks.tool_indices) * 50
-        return text_tokens + reasoning_tokens + tool_tokens
+        tool_tokens = sum(
+            (len(self.blocks.tool_names.get(idx, "")) + len(content)) // 4 + 10
+            for idx, content in self.blocks.tool_contents.items()
+        ) if self.blocks.tool_contents else 0
+        return max(1, text_tokens + reasoning_tokens + tool_tokens)

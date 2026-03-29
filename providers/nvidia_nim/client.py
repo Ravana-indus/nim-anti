@@ -17,6 +17,8 @@ except ImportError:
 import logging
 import time
 import uuid
+import hashlib
+from collections import OrderedDict
 from threading import Lock
 from typing import Any, AsyncIterator, Optional
 
@@ -137,6 +139,12 @@ class NvidiaNimProvider(BaseProvider):
         self._sticky_model_lock = Lock()
         self._sticky_model: Optional[str] = None
 
+        # Item 9: LRU Response Cache for non-streaming completions.
+        # Key: (model, prompt_hash, temperature, top_p, tools_json)
+        self._response_cache: OrderedDict[str, dict] = OrderedDict()
+        self._max_cache_size = 100
+        self._cache_lock = asyncio.Lock()
+
         # Initialize key manager with multiple API keys.
         if config.api_keys and len(config.api_keys) > 0:
             keys = config.api_keys
@@ -172,7 +180,8 @@ class NvidiaNimProvider(BaseProvider):
             ),
         )
 
-        # Backward-compatible primary client attribute.
+        # Backward-compatible attribute — kept for test assertions and admin,
+        # but no longer used for actual API calls (raw httpx replaces SDK).
         self._client = AsyncOpenAI(
             api_key=self._api_key,
             base_url=self._base_url,
@@ -180,26 +189,6 @@ class NvidiaNimProvider(BaseProvider):
             timeout=self._request_timeout_sec,
             http_client=self._http_client,
         )
-
-        # Async client cache per key.
-        self._client_cache: dict[str, AsyncOpenAI] = {self._api_key: self._client}
-
-        async def create_client_for_key(key: str) -> AsyncOpenAI:
-            return AsyncOpenAI(
-                api_key=key,
-                base_url=self._base_url,
-                max_retries=self._openai_max_retries,
-                timeout=self._request_timeout_sec,
-                http_client=self._http_client,
-            )
-
-        self._client_factory = create_client_for_key
-
-    async def _get_client(self, key: str) -> AsyncOpenAI:
-        """Get or create an AsyncOpenAI client for a specific key."""
-        if key not in self._client_cache:
-            self._client_cache[key] = await self._client_factory(key)
-        return self._client_cache[key]
 
     async def _acquire_request_slot(self, request: Any = None) -> None:
         # Simple heuristic: prioritize short messages
@@ -236,6 +225,27 @@ class NvidiaNimProvider(BaseProvider):
     def _build_request_body(self, request: Any, stream: bool = False) -> dict:
         """Internal helper for tests and shared building."""
         return build_request_body(request, self._nim_settings, stream=stream)
+
+    def _get_cache_key(self, model: str, body: dict) -> str:
+        """Generate a stable cache key for a completion request."""
+        # Focus on the core semantic inputs to the model.
+        # We use orjson (fast) to serialize the values for hashing.
+        messages = body.get("messages", [])
+        tools = body.get("tools", [])
+        temp = body.get("temperature", 0.0)
+        top_p = body.get("top_p", 1.0)
+        max_tokens = body.get("max_tokens", 4096)
+        
+        features = {
+            "m": model,
+            "msgs": messages,
+            "t": tools,
+            "temp": temp,
+            "p": top_p,
+            "max": max_tokens
+        }
+        feat_json = _fast_json_dumps(features)
+        return hashlib.sha256(feat_json.encode()).hexdigest()
 
     @staticmethod
     def _flatten_body_for_raw(body: dict) -> bytes:
@@ -391,10 +401,27 @@ class NvidiaNimProvider(BaseProvider):
             used_model = initial_model
             log_request = _get_admin_logger()
             abort_all = False
+
+            # Pre-compute the base body bytes once (Item 6: avoid re-serializing on retries)
+            base_body["stream"] = True
+            # Item 11: Request usage info in streaming chunks for perfect accuracy
+            base_body["stream_options"] = {"include_usage": True}
+            _base_raw = self._flatten_body_for_raw(base_body)
+
             for model_index, model in enumerate(candidate_models):
                 model_start = time.time()
                 skip_current_model = False
                 attempted_keys: set[str] = set()
+
+                # Only re-serialize when model changes
+                if model != initial_model:
+                    body = dict(base_body)
+                    body["model"] = model
+                    body["stream"] = True
+                    raw_body = self._flatten_body_for_raw(body)
+                else:
+                    raw_body = _base_raw
+
                 while True:
                     lease = await self._key_manager.acquire(exclude=attempted_keys)
                     if lease is None:
@@ -406,10 +433,6 @@ class NvidiaNimProvider(BaseProvider):
                     try:
                         used_key = key
                         used_model = model
-                        body = dict(base_body)
-                        body["model"] = model
-                        body["stream"] = True
-                        raw_body = self._flatten_body_for_raw(body)
 
                         # Raw httpx streaming — no SDK Pydantic overhead
                         async with self._http_client.stream(
@@ -427,6 +450,8 @@ class NvidiaNimProvider(BaseProvider):
                                 err_msg = err_body.decode(errors="replace")[:200]
                                 exc = Exception(f"HTTP {raw_resp.status_code}: {err_msg}")
                                 exc.status_code = raw_resp.status_code
+                                # Preserve Retry-After for smarter 429 cooldowns
+                                exc._retry_after = raw_resp.headers.get("retry-after")
                                 raise exc
 
                             async for line in raw_resp.aiter_lines():
@@ -440,7 +465,7 @@ class NvidiaNimProvider(BaseProvider):
 
                                 chunk_usage = chunk.get("usage")
                                 if chunk_usage:
-                                    usage_info = type("U", (), chunk_usage)()
+                                    usage_info = chunk_usage  # keep as dict — no dynamic class
 
                                 choices = chunk.get("choices")
                                 if not choices:
@@ -533,7 +558,10 @@ class NvidiaNimProvider(BaseProvider):
                         status_code = self._status_code(e)
                         error_text = self._describe_attempt_error(e)
                         if status_code == 429:
-                            await self._key_manager.record_rate_limit(key)
+                            # Item 5: Parse Retry-After header if available
+                            retry_after = getattr(e, '_retry_after', None)
+                            cooldown = int(retry_after) if retry_after else None
+                            await self._key_manager.record_rate_limit(key, cooldown_seconds=cooldown)
                         if self._should_record_model_failure(e):
                             await self._get_model_cb(model)._record_failure()
                         await self._record_attempt(
@@ -657,10 +685,10 @@ class NvidiaNimProvider(BaseProvider):
                 yield event
 
             output_tokens = (
-                usage_info.completion_tokens
-                if usage_info and hasattr(usage_info, "completion_tokens")
-                else sse.estimate_output_tokens()
-            )
+                usage_info.get("completion_tokens")
+                if isinstance(usage_info, dict)
+                else None
+            ) or sse.estimate_output_tokens()
             yield sse.message_delta(map_stop_reason(finish_reason), output_tokens)
             yield sse.message_stop()
             done_marker = sse.done()
@@ -677,16 +705,39 @@ class NvidiaNimProvider(BaseProvider):
             base_body = self._build_request_body(request, stream=False)
 
             initial_model = base_body.get("model", request.model)
+            
+            # Item 9: Cache lookup
+            cache_key = self._get_cache_key(initial_model, base_body)
+            async with self._cache_lock:
+                if cache_key in self._response_cache:
+                    logger.debug("CACHE_HIT: %s", initial_model)
+                    # Move to end (MRU)
+                    cached_resp = self._response_cache.pop(cache_key)
+                    self._response_cache[cache_key] = cached_resp
+                    return cached_resp
+
             candidate_models = self._candidate_models(initial_model)
             last_error = None
             start_time = time.time()
             used_model = initial_model
             log_request = _get_admin_logger()
             abort_all = False
+
+            # Pre-compute the base body bytes once
+            _base_raw = self._flatten_body_for_raw(base_body)
+
             for model_index, model in enumerate(candidate_models):
                 model_start = time.time()
                 skip_current_model = False
                 attempted_keys: set[str] = set()
+
+                if model != initial_model:
+                    body = dict(base_body)
+                    body["model"] = model
+                    raw_body = self._flatten_body_for_raw(body)
+                else:
+                    raw_body = _base_raw
+
                 while True:
                     lease = await self._key_manager.acquire(exclude=attempted_keys)
                     if lease is None:
@@ -697,9 +748,6 @@ class NvidiaNimProvider(BaseProvider):
                     attempt_start = time.time()
                     try:
                         used_model = model
-                        body = dict(base_body)
-                        body["model"] = model
-                        raw_body = self._flatten_body_for_raw(body)
 
                         # Raw httpx — no SDK Pydantic overhead
                         resp = await self._http_client.post(
@@ -715,6 +763,7 @@ class NvidiaNimProvider(BaseProvider):
                             err_msg = resp.text[:200]
                             exc = Exception(f"HTTP {resp.status_code}: {err_msg}")
                             exc.status_code = resp.status_code
+                            exc._retry_after = resp.headers.get("retry-after")
                             raise exc
 
                         response_json = _fast_json_loads(resp.content)
@@ -738,13 +787,21 @@ class NvidiaNimProvider(BaseProvider):
                         )
                         self._remember_working_model(model)
 
+                        # Item 9: Cache store
+                        async with self._cache_lock:
+                            if len(self._response_cache) >= self._max_cache_size:
+                                self._response_cache.popitem(last=False)  # FIFO/LRU eviction
+                            self._response_cache[cache_key] = response_json
+
                         return response_json
                     except Exception as e:
                         last_error = e
                         status_code = self._status_code(e)
                         error_text = self._describe_attempt_error(e)
                         if status_code == 429:
-                            await self._key_manager.record_rate_limit(key)
+                            retry_after = getattr(e, '_retry_after', None)
+                            cooldown = int(retry_after) if retry_after else None
+                            await self._key_manager.record_rate_limit(key, cooldown_seconds=cooldown)
                         if self._should_record_model_failure(e):
                             await self._get_model_cb(model)._record_failure()
                         await self._record_attempt(
@@ -809,20 +866,13 @@ class NvidiaNimProvider(BaseProvider):
             await self._release_request_slot()
 
     async def aclose(self) -> None:
-        """Close all open OpenAI clients."""
-        closed_ids: set[int] = set()
-        primary_client = getattr(self, "_client", None)
-        if primary_client is not None and hasattr(primary_client, "aclose"):
-            await primary_client.aclose()
-            closed_ids.add(id(primary_client))
-
-        for client in self._client_cache.values():
-            client_id = id(client)
-            if client_id in closed_ids:
-                continue
-            if hasattr(client, "aclose"):
-                await client.aclose()
-            closed_ids.add(client_id)
+        """Close the shared HTTP client and legacy SDK client."""
+        if hasattr(self, "_http_client") and self._http_client:
+            await self._http_client.aclose()
+        # Close legacy SDK client (kept for backward compat)
+        client = getattr(self, "_client", None)
+        if client is not None and hasattr(client, "aclose"):
+            await client.aclose()
 
     async def get_admin_snapshot(self) -> dict:
         """Return provider runtime status for admin dashboards."""
@@ -838,7 +888,6 @@ class NvidiaNimProvider(BaseProvider):
             "runtime": {
                 "active_requests": active_requests,
                 "max_in_flight": self._max_in_flight,
-                "client_pool_size": len(self._client_cache),
                 "sticky_model": sticky_model,
                 "request_timeout_sec": self._request_timeout_sec,
                 "openai_max_retries": self._openai_max_retries,

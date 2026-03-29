@@ -28,13 +28,31 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, Response
 
 from .dependencies import get_provider, get_settings
+from .telemetry import telemetry
 from config.settings import Settings, get_active_model, get_configured_fallback_models
 from providers.base import BaseProvider
 from providers.exceptions import ProviderError
 
+def _admin_log_request(**kwargs):
+    """Lazy import to avoid circular dependencies with admin module."""
+    try:
+        from .admin import log_request
+        return log_request(**kwargs)
+    except ImportError:
+        return None
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["openai"])
+
+
+def _log_admin(model: str, key: str, status: str, ms: float, error: str = None):
+    """Log to admin dashboard (lazy import to avoid circular deps)."""
+    try:
+        from api.admin import log_request
+        log_request(model=model, key=key, status=status, response_time_ms=ms, error=error)
+    except Exception:
+        pass
 
 
 # =============================================================================
@@ -93,6 +111,7 @@ async def _complete_raw(provider, body: dict):
         model = body.get("model", get_active_model())
         candidates = nim._candidate_models(model)
         last_error = None
+        start = time.time()
 
         for candidate in candidates:
             attempted: set[str] = set()
@@ -120,6 +139,7 @@ async def _complete_raw(provider, body: dict):
                     if resp.status_code == 200:
                         await nim._key_manager.record_success(key)
                         nim._remember_working_model(candidate)
+                        _log_admin(candidate, key, "success", (time.time() - start) * 1000)
                         # Return raw bytes — no parsing
                         return Response(
                             content=resp.content,
@@ -129,7 +149,9 @@ async def _complete_raw(provider, body: dict):
 
                     # Handle errors
                     if resp.status_code == 429:
-                        await nim._key_manager.record_rate_limit(key)
+                        retry_after = resp.headers.get("retry-after")
+                        cooldown = int(retry_after) if retry_after else None
+                        await nim._key_manager.record_rate_limit(key, cooldown_seconds=cooldown)
                     if resp.status_code >= 500:
                         await nim._get_model_cb(candidate)._record_failure()
                     if resp.status_code == 404:
@@ -140,6 +162,7 @@ async def _complete_raw(provider, body: dict):
                             detail=_json_loads(resp.content),
                         )
                     last_error = Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                    _log_admin(candidate, key, "failed", (time.time() - start) * 1000, str(last_error)[:200])
                     continue
 
                 except HTTPException:
@@ -205,7 +228,9 @@ async def _stream_raw(provider, body: dict):
                         if resp.status_code != 200:
                             error_body = await resp.aread()
                             if resp.status_code == 429:
-                                await nim._key_manager.record_rate_limit(key)
+                                retry_after = resp.headers.get("retry-after")
+                                cooldown = int(retry_after) if retry_after else None
+                                await nim._key_manager.record_rate_limit(key, cooldown_seconds=cooldown)
                             if resp.status_code >= 500:
                                 await nim._get_model_cb(candidate)._record_failure()
                             if resp.status_code == 404:
@@ -291,3 +316,52 @@ async def list_models():
             for model in all_models
         ],
     }
+
+
+# =============================================================================
+# /health/deep  — Item 12: verify upstream liveness
+# =============================================================================
+
+
+@router.get("/health/deep")
+async def deep_health(
+    provider: BaseProvider = Depends(get_provider),
+):
+    """Deep health check: verify at least one key can reach NIM."""
+    nim = provider
+    try:
+        lease = await nim._key_manager.acquire()
+        if lease is None:
+            return {
+                "status": "degraded",
+                "detail": "No API keys available",
+                "upstream": "unknown",
+            }
+        try:
+            resp = await nim._http_client.post(
+                f"{nim._base_url}/chat/completions",
+                content=_json_bytes({
+                    "model": get_active_model(),
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 1,
+                    "stream": False,
+                }),
+                headers={
+                    "Authorization": f"Bearer {lease.key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            upstream_ok = resp.status_code == 200
+            return {
+                "status": "healthy" if upstream_ok else "degraded",
+                "upstream": f"HTTP {resp.status_code}",
+                "model": get_active_model(),
+            }
+        finally:
+            await lease.release()
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "detail": str(e)[:200],
+            "upstream": "unreachable",
+        }

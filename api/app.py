@@ -13,7 +13,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.gzip import GZipMiddleware
 
 try:
     from fastapi.responses import ORJSONResponse
@@ -179,8 +178,29 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     app.include_router(openai_router)
 
-    # GZip compression for responses > 500 bytes
-    app.add_middleware(GZipMiddleware, minimum_size=500)
+    # GZip compression ONLY for non-streaming responses > 500 bytes.
+    # SSE streams must NOT be compressed — it adds latency and defeats streaming.
+    # We skip GZip when Accept: text/event-stream is in the request.
+    from starlette.middleware.gzip import GZipMiddleware as _GZip
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
+    class SelectiveGZipMiddleware:
+        """GZip middleware that skips SSE streaming requests."""
+        def __init__(self, app: ASGIApp):
+            self._gzip_app = _GZip(app, minimum_size=500).app  # inner gzip responder
+            self._app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                headers = dict(scope.get("headers", []))
+                accept = headers.get(b"accept", b"").decode(errors="ignore")
+                # Skip GZip for SSE clients — they need raw chunked streaming
+                if "text/event-stream" in accept:
+                    await self._app(scope, receive, send)
+                    return
+            await self._gzip_app(scope, receive, send)
+
+    app.add_middleware(SelectiveGZipMiddleware)
 
     # Mount admin static files
     app.mount("/admin/static", StaticFiles(directory="static/admin"), name="admin-static")
