@@ -9,22 +9,114 @@ from providers.base import ProviderConfig
 from config.nim import NimSettings
 
 
-class AsyncStreamMock:
-    """Async iterable mock that yields chunks then optionally raises."""
+# ---------- Raw httpx mock helpers ----------
 
-    def __init__(self, chunks, error=None):
-        self._chunks = chunks
-        self._error = error
+def _make_sse_lines(chunks: list[dict]) -> list[str]:
+    """Convert chunk dicts into SSE lines."""
+    lines = []
+    for chunk in chunks:
+        lines.append(f"data: {json.dumps(chunk)}")
+    lines.append("data: [DONE]")
+    return lines
 
-    def __aiter__(self):
-        return self._aiter()
 
-    async def _aiter(self):
-        for chunk in self._chunks:
-            yield chunk
-        if self._error:
-            raise self._error
+def _mock_httpx_stream(lines: list[str], status_code: int = 200):
+    """Create a mock async context manager that mimics httpx.stream()."""
+    class _MockResponse:
+        def __init__(self):
+            self.status_code = status_code
 
+        async def aiter_lines(self):
+            for line in lines:
+                yield line
+
+        async def aread(self):
+            return b""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    return _MockResponse()
+
+
+def _mock_httpx_stream_error(status_code: int, body: str = "error"):
+    """Create a mock stream that returns an error status code."""
+    class _MockResponse:
+        def __init__(self):
+            self.status_code = status_code
+
+        async def aread(self):
+            return body.encode()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    return _MockResponse()
+
+
+def _mock_httpx_stream_with_mid_error(lines_before_error: list[str], error: Exception):
+    """Create a mock stream that yields some lines then raises an error."""
+    class _MockResponse:
+        def __init__(self):
+            self.status_code = 200
+
+        async def aiter_lines(self):
+            for line in lines_before_error:
+                yield line
+            raise error
+
+        async def aread(self):
+            return b""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    return _MockResponse()
+
+
+def _make_text_chunk(text: str, finish_reason=None, usage=None):
+    """Build a minimal OpenAI streaming chunk dict."""
+    chunk = {
+        "choices": [{
+            "delta": {"content": text, "role": "assistant"},
+            "finish_reason": finish_reason,
+        }],
+    }
+    if usage:
+        chunk["usage"] = usage
+    return chunk
+
+
+def _make_reasoning_chunk(reasoning: str, finish_reason=None):
+    """Build an OpenAI streaming chunk with reasoning_content."""
+    return {
+        "choices": [{
+            "delta": {"reasoning_content": reasoning, "role": "assistant"},
+            "finish_reason": finish_reason,
+        }],
+    }
+
+
+def _make_empty_chunk(finish_reason="stop"):
+    """Build a chunk with no content."""
+    return {
+        "choices": [{
+            "delta": {"role": "assistant"},
+            "finish_reason": finish_reason,
+        }],
+    }
+
+
+# ---------- Provider/Request helpers ----------
 
 def _make_provider():
     """Create a provider instance for testing."""
@@ -58,25 +150,6 @@ def _make_request(model="test-model", stream=True):
     return req
 
 
-def _make_chunk(
-    content=None, finish_reason=None, tool_calls=None, reasoning_content=None
-):
-    """Create a mock streaming chunk."""
-    delta = MagicMock()
-    delta.content = content
-    delta.tool_calls = tool_calls
-    delta.reasoning_content = reasoning_content if reasoning_content else None
-
-    choice = MagicMock()
-    choice.delta = delta
-    choice.finish_reason = finish_reason
-
-    chunk = MagicMock()
-    chunk.choices = [choice]
-    chunk.usage = None
-    return chunk
-
-
 async def _collect_stream(provider, request):
     """Collect all SSE events from a stream."""
     events = []
@@ -94,14 +167,13 @@ class TestStreamingExceptionHandling:
         provider = _make_provider()
         request = _make_request()
 
-        mock_stream = AsyncMock()
-        mock_stream.__aiter__ = MagicMock(side_effect=RuntimeError("API failed"))
+        def mock_stream_raise(*args, **kwargs):
+            raise RuntimeError("API failed")
 
         with patch.object(
-            provider._client.chat.completions,
-            "create",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("API failed"),
+            provider._http_client,
+            "stream",
+            side_effect=mock_stream_raise,
         ):
             with patch.object(
                 provider._global_rate_limiter,
@@ -124,14 +196,15 @@ class TestStreamingExceptionHandling:
         provider = _make_provider()
         request = _make_request()
 
-        chunk1 = _make_chunk(content="Hello ")
-        stream_mock = AsyncStreamMock([chunk1], error=RuntimeError("Connection lost"))
+        partial_lines = [f"data: {json.dumps(_make_text_chunk('Hello '))}"]
+        mock_stream = _mock_httpx_stream_with_mid_error(
+            partial_lines, RuntimeError("Connection lost")
+        )
 
         with patch.object(
-            provider._client.chat.completions,
-            "create",
-            new_callable=AsyncMock,
-            return_value=stream_mock,
+            provider._http_client,
+            "stream",
+            return_value=mock_stream,
         ):
             with patch.object(
                 provider._global_rate_limiter,
@@ -152,14 +225,14 @@ class TestStreamingExceptionHandling:
         provider = _make_provider()
         request = _make_request()
 
-        empty_chunk = _make_chunk(finish_reason="stop")
-        stream_mock = AsyncStreamMock([empty_chunk])
+        chunks = [_make_empty_chunk()]
+        sse_lines = _make_sse_lines(chunks)
+        mock_stream = _mock_httpx_stream(sse_lines)
 
         with patch.object(
-            provider._client.chat.completions,
-            "create",
-            new_callable=AsyncMock,
-            return_value=stream_mock,
+            provider._http_client,
+            "stream",
+            return_value=mock_stream,
         ):
             with patch.object(
                 provider._global_rate_limiter,
@@ -179,15 +252,17 @@ class TestStreamingExceptionHandling:
         provider = _make_provider()
         request = _make_request()
 
-        chunk1 = _make_chunk(content="<think>reasoning</think>answer")
-        chunk2 = _make_chunk(finish_reason="stop")
-        stream_mock = AsyncStreamMock([chunk1, chunk2])
+        chunks = [
+            _make_text_chunk("<think>reasoning</think>answer"),
+            _make_empty_chunk(),
+        ]
+        sse_lines = _make_sse_lines(chunks)
+        mock_stream = _mock_httpx_stream(sse_lines)
 
         with patch.object(
-            provider._client.chat.completions,
-            "create",
-            new_callable=AsyncMock,
-            return_value=stream_mock,
+            provider._http_client,
+            "stream",
+            return_value=mock_stream,
         ):
             with patch.object(
                 provider._global_rate_limiter,
@@ -208,16 +283,18 @@ class TestStreamingExceptionHandling:
         provider = _make_provider()
         request = _make_request()
 
-        chunk1 = _make_chunk(reasoning_content="I think...")
-        chunk2 = _make_chunk(content="The answer")
-        chunk3 = _make_chunk(finish_reason="stop")
-        stream_mock = AsyncStreamMock([chunk1, chunk2, chunk3])
+        chunks = [
+            _make_reasoning_chunk("I think..."),
+            _make_text_chunk("The answer"),
+            _make_empty_chunk(),
+        ]
+        sse_lines = _make_sse_lines(chunks)
+        mock_stream = _mock_httpx_stream(sse_lines)
 
         with patch.object(
-            provider._client.chat.completions,
-            "create",
-            new_callable=AsyncMock,
-            return_value=stream_mock,
+            provider._http_client,
+            "stream",
+            return_value=mock_stream,
         ):
             with patch.object(
                 provider._global_rate_limiter,
@@ -238,15 +315,17 @@ class TestStreamingExceptionHandling:
         provider = _make_provider()
         request = _make_request()
 
-        chunk1 = _make_chunk(content="Response")
-        chunk2 = _make_chunk(finish_reason="stop")
-        stream_mock = AsyncStreamMock([chunk1, chunk2])
+        chunks = [
+            _make_text_chunk("Response"),
+            _make_empty_chunk(),
+        ]
+        sse_lines = _make_sse_lines(chunks)
+        mock_stream = _mock_httpx_stream(sse_lines)
 
         with patch.object(
-            provider._client.chat.completions,
-            "create",
-            new_callable=AsyncMock,
-            return_value=stream_mock,
+            provider._http_client,
+            "stream",
+            return_value=mock_stream,
         ):
             with patch.object(
                 provider._global_rate_limiter,
