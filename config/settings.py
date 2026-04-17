@@ -20,6 +20,7 @@ DEFAULT_NIM_MODEL_FALLBACK_ORDER = [
     "moonshotai/kimi-k2.5",
     "minimaxai/minimax-m2.1",
     "minimaxai/minimax-m2.5",
+    "minimaxai/minimax-m2.7",
     "stepfun-ai/step-3.5-flash",
     "nvidia/nemotron-3-super-120b-a12b",
     "qwen/qwen3.5-122b-a10b",
