@@ -200,6 +200,12 @@
             "owned_by": "google"
         },
         {
+            "id": "google/gemma-4-31b-it",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "google"
+        },
+        {
             "id": "google/gemma-7b",
             "object": "model",
             "created": 735790403,
@@ -1116,6 +1122,12 @@
             "object": "model",
             "created": 735790403,
             "owned_by": "yentinglin"
+        },
+        {
+            "id": "z-ai/glm-4.7",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "z-ai"
         },
         {
             "id": "z-ai/glm4.7",
