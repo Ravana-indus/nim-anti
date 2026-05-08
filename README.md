@@ -95,6 +95,7 @@ See [`nvidia_nim_models.json`](nvidia_nim_models.json) for all supported models.
 | `moonshotai/kimi-k2-thinking` | Complex reasoning (default) |
 | `stepfun-ai/step-3.5-flash` | Fast responses |
 | `moonshotai/kimi-k2.5` | General purpose |
+| `moonshotai/kimi-k2.6` | General purpose (latest) |
 | `mistralai/devstral-2-123b-instruct-2512` | Code tasks |
 
 Browse all models at [build.nvidia.com/explore/discover](https://build.nvidia.com/explore/discover)

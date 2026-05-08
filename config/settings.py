@@ -16,7 +16,9 @@ load_dotenv()
 # Fixed base URL for NVIDIA NIM
 NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 DEFAULT_NIM_MODEL_FALLBACK_ORDER = [
+    "z-ai/glm-5.1",
     "z-ai/glm5",
+    "moonshotai/kimi-k2.6",
     "moonshotai/kimi-k2.5",
     "minimaxai/minimax-m2.1",
     "minimaxai/minimax-m2.5",
@@ -28,6 +30,8 @@ DEFAULT_NIM_MODEL_FALLBACK_ORDER = [
     "qwen/qwen3-coder-480b-a35b-instruct",
     "qwen/qwen3.5-397b-a17b",
     "sarvamai/sarvam-m",
+    "deepseek-ai/deepseek-v4-pro",
+    "deepseek-ai/deepseek-v4-flash",
     "deepseek-ai/deepseek-v3_2",
 ]
 

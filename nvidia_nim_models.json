@@ -122,6 +122,18 @@
             "owned_by": "deepseek-ai"
         },
         {
+            "id": "deepseek-ai/deepseek-v4-flash",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "deepseek-ai"
+        },
+        {
+            "id": "deepseek-ai/deepseek-v4-pro",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "deepseek-ai"
+        },
+        {
             "id": "google/codegemma-1.1-7b",
             "object": "model",
             "created": 735790403,
@@ -638,6 +650,12 @@
             "owned_by": "moonshotai"
         },
         {
+            "id": "moonshotai/kimi-k2.6",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "moonshotai"
+        },
+        {
             "id": "nv-mistralai/mistral-nemo-12b-instruct",
             "object": "model",
             "created": 735790403,
@@ -1137,6 +1155,12 @@
         },
         {
             "id": "z-ai/glm5",
+            "object": "model",
+            "created": 735790403,
+            "owned_by": "z-ai"
+        },
+        {
+            "id": "z-ai/glm-5.1",
             "object": "model",
             "created": 735790403,
             "owned_by": "z-ai"
